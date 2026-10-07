@@ -2,3 +2,14 @@
 /software_racheta/target
 /software_racheta/Cargo.lock
 /firmware_racheta/target
+/cod_stm_l452re-p/Drivers
+/cod_stm_l452re-p/EWARM
+/cod_stm_l452re-p/STM32L452XX_FLASH.ld
+/cod_stm_l452re-p/Makefile
+/cod_stm_l452re-p/build/Debug
+/cod_stm_l452re-p/cmake
+/cod_stm_l452re-p/cod_stm_l452re-p.ioc
+/cod_stm_l452re-p/compile_commands.json
+/cod_stm_l452re-p/startup_stm32l452xx.s
+/cod_stm_l452re-p/CMakePresets.json
+/cod_stm_l452re-p/.mxproject
