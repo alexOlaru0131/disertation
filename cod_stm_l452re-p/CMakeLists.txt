@@ -42,6 +42,7 @@ add_subdirectory(cmake/stm32cubemx)
 # Link directories setup
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/app.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/ili9488.cpp
 )
 
 # Add sources to executable

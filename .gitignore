@@ -13,3 +13,4 @@
 /cod_stm_l452re-p/startup_stm32l452xx.s
 /cod_stm_l452re-p/CMakePresets.json
 /cod_stm_l452re-p/.mxproject
+/cod_stm_l452re-p/Middlewares/Third_Party/FreeRTOS/Source
