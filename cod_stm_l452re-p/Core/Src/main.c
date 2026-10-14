@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 
 #include "app.hpp"
+#include "drawing_type.h"
 
 /* USER CODE END Includes */
 
@@ -52,6 +53,16 @@ const osThreadAttr_t defaultTask_attributes = {
     .stack_size = 128 * 4,
     .priority = (osPriority_t)osPriorityNormal,
 };
+/* Definitions for drawingTask */
+osThreadId_t drawingTaskHandle;
+const osThreadAttr_t drawingTask_attributes = {
+    .name = "drawingTask",
+    .stack_size = 128 * 4,
+    .priority = (osPriority_t)osPriorityNormal,
+};
+/* Definitions for drawingQueue */
+osMessageQueueId_t drawingQueueHandle;
+const osMessageQueueAttr_t drawingQueue_attributes = {.name = "drawingQueue"};
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -61,6 +72,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 void StartDefaultTask(void *argument);
+void DrawingTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -120,14 +132,23 @@ int main(void) {
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
+  /* Create the queue(s) */
+  /* creation of drawingQueue */
+  drawingQueueHandle = osMessageQueueNew(32, sizeof(struct DrawingType),
+                                         &drawingQueue_attributes);
+
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
   /* creation of defaultTask */
-  defaultTaskHandle =
-      osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  defaultTaskHandle = osThreadNew(StartDefaultTask, (void *)drawingQueueHandle,
+                                  &defaultTask_attributes);
+
+  /* creation of drawingTask */
+  drawingTaskHandle = osThreadNew(DrawingTask, (void *)drawingQueueHandle,
+                                  &drawingTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -146,9 +167,9 @@ int main(void) {
   /* USER CODE BEGIN WHILE */
   // while (1)
   // {
-  //   /* USER CODE END WHILE */
-  //
-  //   /* USER CODE BEGIN 3 */
+  /* USER CODE END WHILE */
+
+  /* USER CODE BEGIN 3 */
   // }
   /* USER CODE END 3 */
 }
@@ -287,19 +308,14 @@ static void MX_GPIO_Init(void) {
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LCD_D1_Pin LCD_D0_Pin LCD_RS_Pin LCD_WR_Pin */
-  GPIO_InitStruct.Pin = LCD_D1_Pin | LCD_D0_Pin | LCD_RS_Pin | LCD_WR_Pin;
+  /*Configure GPIO pins : LCD_D1_Pin LCD_D0_Pin LCD_RS_Pin LCD_WR_Pin
+                           LCD_RD_Pin */
+  GPIO_InitStruct.Pin =
+      LCD_D1_Pin | LCD_D0_Pin | LCD_RS_Pin | LCD_WR_Pin | LCD_RD_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : LCD_RD_Pin */
-  GPIO_InitStruct.Pin = LCD_RD_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
-  HAL_GPIO_Init(LCD_RD_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -320,8 +336,22 @@ static void MX_GPIO_Init(void) {
 void StartDefaultTask(void *argument) {
   /* USER CODE BEGIN 5 */
   /* Infinite loop */
-  start();
+  start(argument);
   /* USER CODE END 5 */
+}
+
+/* USER CODE BEGIN Header_DrawingTask */
+/**
+ * @brief Function implementing the drawingTask thread.
+ * @param argument: Not used
+ * @retval None
+ */
+/* USER CODE END Header_DrawingTask */
+void DrawingTask(void *argument) {
+  /* USER CODE BEGIN DrawingTask */
+  /* Infinite loop */
+  drawing_task_implementation(argument);
+  /* USER CODE END DrawingTask */
 }
 
 /**

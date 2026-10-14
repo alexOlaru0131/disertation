@@ -1,4 +1,5 @@
-#ifdef __cplusplus
+#include "cmsis_os.h"
+#include "cmsis_os2.h"
 
 #include "ili9488.hpp"
 #include "main.h"
@@ -37,6 +38,44 @@ void Ili9488::write_register(uint8_t command, const uint8_t *args,
   }
 }
 
+void Ili9488::request_draw_color_in_window(uint16_t x0, uint16_t y0,
+                                           uint16_t x1, uint16_t y1,
+                                           Color color) {
+  DrawingType dt{};
+  dt.color = color;
+  dt.drawing_operation = 2;
+  dt.x1 = x0;
+  dt.x2 = x1;
+  dt.y1 = y0;
+  dt.y2 = y1;
+
+  osMessageQueuePut(this->queue, &dt, NULL, osWaitForever);
+}
+
+void Ili9488::draw_color_in_window(uint16_t x0, uint16_t y0, uint16_t x1,
+                                   uint16_t y1, Color color) {
+  this->set_drawing_window(x0, y0, x1 - 1, y1 - 1);
+  this->write_register(0x2C, nullptr, 0);
+
+  for (int i = 0; i < y1 - y0; i++) {
+    for (int j = 0; j < x1 - x0; j++) {
+      this->write_color_data(color);
+    }
+  }
+}
+
+void Ili9488::request_set_drawing_window(uint16_t x0, uint16_t y0, uint16_t x1,
+                                         uint16_t y1) {
+  DrawingType dt{};
+  dt.drawing_operation = 3;
+  dt.x1 = x0;
+  dt.y1 = y0;
+  dt.x2 = x1 - 1;
+  dt.y2 = y1 - 1;
+
+  osMessageQueuePut(this->queue, &dt, NULL, osWaitForever);
+}
+
 void Ili9488::set_drawing_window(uint16_t x0, uint16_t y0, uint16_t x1,
                                  uint16_t y1) {
   const uint8_t column_args[] = {
@@ -49,6 +88,15 @@ void Ili9488::set_drawing_window(uint16_t x0, uint16_t y0, uint16_t x1,
   this->write_register(0x2A, column_args,
                        static_cast<uint8_t>(sizeof(column_args)));
   this->write_register(0x2B, row_args, static_cast<uint8_t>(sizeof(row_args)));
+  this->write_register(0x2C, nullptr, 0);
+}
+
+void Ili9488::request_write_color_data(Color color) {
+  DrawingType dt{};
+  dt.drawing_operation = 4;
+  dt.color = color;
+
+  osMessageQueuePut(this->queue, &dt, NULL, osWaitForever);
 }
 
 void Ili9488::write_color_data(Color color) {
@@ -58,7 +106,9 @@ void Ili9488::write_color_data(Color color) {
                    GPIO_PIN_SET);
 }
 
-void Ili9488::init_display() {
+void Ili9488::init_display(osMessageQueueId_t queue) {
+  this->queue = queue;
+
   this->LCD_RD = Pin{LCD_RD_Pin, LCD_RD_GPIO_Port};
   this->LCD_WR = Pin{LCD_WR_Pin, LCD_WR_GPIO_Port};
   this->LCD_RS = Pin{LCD_RS_Pin, LCD_RS_GPIO_Port};
@@ -79,9 +129,8 @@ void Ili9488::init_display() {
 
   HAL_GPIO_WritePin(this->LCD_RST.pin_port, this->LCD_RST.pin_id,
                     GPIO_PIN_RESET);
-  HAL_Delay(20);
+  HAL_Delay(100);
   HAL_GPIO_WritePin(this->LCD_RST.pin_port, this->LCD_RST.pin_id, GPIO_PIN_SET);
-  HAL_Delay(120);
 
   this->write_register(0x01, nullptr, 0);
   HAL_Delay(120);
@@ -135,7 +184,6 @@ void Ili9488::init_display() {
   this->write_register(0x11, nullptr, 0);
   HAL_Delay(120);
   this->write_register(0x29, nullptr, 0);
-  HAL_Delay(20);
 }
 
 GPIO_PinState Ili9488::return_pin_state_for_data_line(uint8_t pin_number,
@@ -156,6 +204,14 @@ void Ili9488::draw_pixel(uint16_t x, uint16_t y, Color color) {
   this->write_color_data(color);
 }
 
+void Ili9488::request_fill_screen(Color color) {
+  DrawingType dt{};
+  dt.drawing_operation = 1;
+  dt.color = color;
+
+  osMessageQueuePut(this->queue, &dt, NULL, osWaitForever);
+}
+
 void Ili9488::fill_screen(Color color) {
   this->set_drawing_window(0, 0, this->width - 1, this->height - 1);
   this->write_register(0x2C, nullptr, 0);
@@ -166,18 +222,4 @@ void Ili9488::fill_screen(Color color) {
     this->write_color_data(color);
   }
 }
-
-void Ili9488::draw_image_in_window(uint16_t x0, uint16_t y0, uint16_t x1,
-                                   uint16_t y1, Image image) {
-  this->set_drawing_window(x0, y0, x1 - 1, y1 - 1);
-  this->write_register(0x2C, nullptr, 0);
-
-  for (int i = 0; i < y1 - y0; i++) {
-    for (int j = 0; j < x1 - x0; j++) {
-      this->write_color_data(image.pixel[i][j]);
-    }
-  }
 }
-}
-
-#endif
