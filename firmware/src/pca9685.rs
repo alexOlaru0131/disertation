@@ -1,3 +1,4 @@
+use feather_m0 as bsp;
 use feather_m0::ehal::delay::DelayNs;
 use feather_m0::ehal::i2c::{Error as _, ErrorKind, I2c};
 
@@ -104,4 +105,23 @@ fn angle_to_ticks(centidegrees: u16) -> u16 {
     let centidegrees = centidegrees.min(36_000) as f32;
     let pulse_us = MIN_US + (centidegrees / 36_000.0) * (MAX_US - MIN_US);
     (pulse_us * 50.0 * 4096.0 / 1_000_000.0 + 0.5) as u16
+}
+
+pub(crate) fn update_pwm<I: I2c, D: bsp::ehal::delay::DelayNs>(
+    pwm: &mut Pca9685,
+    initialized: &mut bool,
+    i2c: &mut I,
+    delay: &mut D,
+    angles: &[u16],
+) -> Result<(), SensorError> {
+    if !*initialized {
+        pwm.init(i2c, delay)?;
+        *initialized = true;
+    }
+
+    if let Err(error) = pwm.set_pwm_vals(i2c, angles) {
+        *initialized = false;
+        return Err(error);
+    }
+    Ok(())
 }

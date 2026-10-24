@@ -76,12 +76,12 @@ răspunsul plăcii:
 python3 test_pca9685.py 9000
 ```
 
-Comanda USB este `0x11` urmat de **20 de unghiuri `u16` little-endian** (40 de
+Comanda USB este `0x20` urmat de **20 de unghiuri `u16` little-endian** (40 de
 octeți): primele 10 merg la `0x41`, următoarele 10 la `0x42`. Unghiurile sunt
 în sutimi de grad, între `0` și `36000` (`9000` = 90°); toate cele 20 sunt
 validate înainte de a fi trimise pe I²C. Scriptul acceptă fie un unghi pentru
 toate canalele, fie 20 de unghiuri separate în această ordine. Răspunsul de
-succes `[0x11, 20]` confirmă scrierea ambelor module. O eroare produce
+succes `[0x20, 20]` confirmă scrierea ambelor module. O eroare produce
 `[0xE1, adresă, cod, etapă, detaliu]`, unde adresa este `0x41` sau `0x42`:
 codul 1 indică o eroare I²C (etapele: 1 citire registru, 2 MODE2/OUTDRV,
 3 sleep, 4 prescaler, 5 wake, 6 restart, 7 PWM; detaliul: 1 NACK,
@@ -90,3 +90,24 @@ număr invalid de canale, codul 3 un număr insuficient de unghiuri, iar codul 4
 un unghi peste 36000 (etapa este indicele canalului 0–9). Modulele sunt
 inițializate și actualizate independent; dacă unul nu răspunde, celălalt
 primește totuși comanda.
+
+## LED pe A0
+
+Conectează A0 la anodul LED-ului printr-o rezistență de 470 Ω, iar catodul
+LED-ului la GND. LED-ul are nevoie de rezistența în serie când este alimentat
+din pinul GPIO.
+
+Pinul A0 este configurat ca ieșire digitală, inițial la nivel LOW (LED stins).
+Trimite octetul `0x30` prin USB CDC pentru a-l aprinde (HIGH) sau `0x35`
+pentru a-l stinge (LOW). Comenzile LED nu trimit răspuns USB.
+
+Pentru a testa ambele stări, cu confirmare vizuală la fiecare pas:
+
+```sh
+python3 test_led.py
+```
+
+Scriptul stinge LED-ul și dacă testul este întrerupt. Poți folosi
+`python3 test_led.py --no-confirm` pentru a trimite automat comenzile fără
+confirmarea vizuală a stării LED-ului; în acest mod LED-ul rămâne aprins o
+secundă. În testul interactiv, rămâne aprins până răspunzi la prima întrebare.

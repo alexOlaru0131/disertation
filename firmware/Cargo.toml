@@ -15,7 +15,9 @@ panic-probe = { version = "1", features = ["print-defmt"] }
 defmt = "1"
 defmt-rtt = "1"
 
-feather_m0 = { version = "0.20.4", features = ["usb", "express", "rt"] }
+feather_m0 = { version = "0.20.4", features = ["usb", "express", "rt", "rtic"] }
 usb-device = "0.3"
 usbd-serial = "0.2"
 panic-halt = "1"
+rtic = { version = "2.3.1", features = ["thumbv6-backend"] }
+portable-atomic = { version = "1", features = ["critical-section"] }

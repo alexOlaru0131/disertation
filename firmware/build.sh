@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+clear
+
 set -euo pipefail
 
 cargo build --release
@@ -12,3 +14,14 @@ fi
 cargo hf2 --release
 
 python3 read_imu.py "$app_port"
+
+sleep 5s
+
+for i in $(seq 1 10); do
+  python3 test_pca9685.py "$((i * 1000))"
+  sleep 0.5
+done
+
+sleep 5s
+
+python3 test_led.py --no-confirm

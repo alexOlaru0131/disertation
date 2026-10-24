@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Request one measurement frame from the Feather M0 over USB CDC."""
 
 import argparse
 import struct
@@ -53,7 +52,9 @@ def main():
         header = read_exact(port, 1)[0]
         if header == 0xE0:
             code, detail, extra = read_exact(port, 3)
-            raise RuntimeError(f"Senzor: eroare {code}, detaliu {detail}, supliment {extra}")
+            raise RuntimeError(
+                f"Senzor: eroare {code}, detaliu {detail}, supliment {extra}"
+            )
         if header != 0x10:
             raise RuntimeError(f"Antet necunoscut: 0x{header:02X}")
         values = struct.unpack("<10i", read_exact(port, 40))

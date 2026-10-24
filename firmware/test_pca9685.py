@@ -37,7 +37,7 @@ def main():
             time.sleep(0.1)
 
     with port:
-        payload = bytearray((0x11,))
+        payload = bytearray((0x20,))
         for angle in angles:
             payload.extend(angle.to_bytes(2, "little"))
         port.write(payload)
@@ -50,7 +50,7 @@ def main():
             raise RuntimeError(
                 f"PCA9685 0x{address:02X}: error {code}, stage/channel {stage}, detail {detail}"
             )
-        if reply != b"\x11":
+        if reply != b"\x20":
             raise RuntimeError(f"Unexpected PCA9685 response: {reply!r}")
         count = port.read(1)
         if count != b"\x14":
