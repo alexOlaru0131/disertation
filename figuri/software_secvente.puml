@@ -1,0 +1,112 @@
+@startuml
+
+box "ESP32" #White
+  participant "Main Task"
+end box
+
+box "Raspberry Pi" #LightBlue
+  participant "Server Process"
+  participant "USB Process"
+end box
+
+box "Feather M0" #LightGreen
+  participant "Scheduler"
+  participant "USB Task"
+  participant "IMU Task"
+  participant "PWM Controllers Task"
+  participant "LED Task"
+  participant "Display Task"
+end box
+
+participant "PCA9685 1"
+participant "PCA9685 2"
+participant ICM20948
+participant "LED (A0)"
+participant ILI9488
+
+"Server Process" -> "USB Process": spawn()
+"Scheduler" -> "USB Task": spawn()
+"Scheduler" -> "IMU Task": spawn()
+"IMU Task" -> ICM20948: new()
+"Scheduler" -> "PWM Controllers Task": spawn()
+"Scheduler" -> "LED Task": spawn()
+"PWM Controllers Task" -> "PCA9685 1": new()
+"PWM Controllers Task" -> "PCA9685 2": new()
+"Scheduler" -> ILI9488: new()
+"Scheduler" -> "Display Task": spawn()
+
+"USB Task" -> "USB Task": wait(1000 ms)
+"IMU Task" -> ICM20948: init()
+"Display Task" -> ILI9488: init()
+
+loop 
+
+  "USB Task" -> "USB Task": poll_usb()
+  "IMU Task" -> "Scheduler": lock usb
+
+    alt Ok(())
+
+      "IMU Task" -> "IMU Task": wait(15 ms)
+
+    else Err(error)
+
+      "IMU Task" -> "USB Process": icm20948_init_error
+
+    end
+
+
+  alt 0x20
+
+    "USB Process" -> "USB Task": 0x20, pwm values
+    "USB Task" --> "USB Process": 0xE1
+    "USB Task" -> "USB Task": delay(5 ms)
+    "PWM Controllers Task" -> "Scheduler": lock pwm values
+    "PWM Controllers Task" -> "PCA9685 1": update_pwm()
+    "PWM Controllers Task" -> "PCA9685 2": update_pwm()
+    "PWM Controllers Task" -> "Scheduler": lock usb
+
+    alt Ok(())
+
+      "PWM Controllers Task" -> "USB Process": [0x20; 20][..]
+
+    else Err(error)
+
+      "PWM Controllers Task" -> "USB Process": pca9685_error_packet
+
+    end
+
+  "PWM Controllers Task" -> "PWM Controllers Task": delay(5 ms)
+
+  else 0x10
+
+    "USB Process" -> "USB Task": 0x10
+    "USB Task" -> "Scheduler": request imu
+    "USB Task" -> "USB Task": delay(5 ms)
+    "IMU Task" -> "Scheduler": lock i2c
+    "IMU Task" -> ICM20948: read_measurements()
+    "IMU Task" -> "Scheduler": lock usb
+
+    alt Ok(())
+
+      "IMU Task" -> "USB Process": imu values
+
+    else Err(error)
+
+      "IMU Task" -> "USB Process": icm20948_error_packet
+    end
+
+    "IMU Task" -> "IMU Task": delay(1 ms)
+
+  else 0x30
+
+    "USB Process" -> "USB Task": 0x30
+    "USB Task" -> "Scheduler": request led
+    "USB Task" -> "USB Task": delay(5 ms)
+    "LED Task" -> "LED (A0)": on/off
+    "LED Task" -> "LED Task": delay(5 ms)
+
+  end
+
+end
+
+@enduml

@@ -1,0 +1,8 @@
+[package]
+name = "software"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cxx-build = "1.0.205"
+tokio = "1.54.1"
