@@ -140,7 +140,7 @@ impl Icm20948 {
                 gyro_x100(gyro(6)),
                 gyro_x100(gyro(8)),
                 gyro_x100(gyro(10)),
-                magnetic(1) * 15, 
+                magnetic(1) * 15,
                 magnetic(3) * 15,
                 magnetic(5) * 15,
                 2_100 + round_div(temp * 10_000, 33_387),

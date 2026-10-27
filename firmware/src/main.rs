@@ -2,32 +2,31 @@
 #![no_main]
 
 mod icm20948;
+mod ili9488;
 mod pca9685;
 mod usb;
 
 use panic_halt as _;
 
-use bsp::ehal::i2c::I2c;
 use bsp::hal::gpio::{PA02, Pin, PushPullOutput};
 use bsp::hal::{clock::GenericClockController, prelude::*, usb::UsbBus};
 use feather_m0 as bsp;
 
 use icm20948::{Icm20948, SensorError};
+use ili9488::*;
 use pca9685::*;
 use usb::*;
 use usb_device::bus::UsbBusAllocator;
 use usb_device::prelude::*;
 use usbd_serial::{SerialPort, USB_CLASS_CDC};
+bsp::hal::rtc_monotonic!(Mono, bsp::hal::rtc::rtic::rtc_clock::Clock32k);
 
 const UF2_MAGIC_ADDRESS: *mut u32 = 0x2000_7FFC as *mut u32;
 const UF2_MAGIC: u32 = 0xF016_69EF;
-const PWM_CHANNELS: usize = 10;
-const PWM_ANGLES: usize = 2 * PWM_CHANNELS;
 const PWM_MAX_ANGLE: u16 = 36_000;
-const PWM_ADDRESS_1: u8 = 0x41;
-const PWM_ADDRESS_2: u8 = 0x42;
-const INA219_ADDRESS: u8 = 0x40;
-bsp::hal::rtc_monotonic!(Mono, bsp::hal::rtc::rtic::rtc_clock::Clock32k);
+const PWM_CHANNELS: usize = 10;
+const PCA9685_ADDRESS_1: u8 = 0x41;
+const PCA9685_ADDRESS_2: u8 = 0x42;
 
 #[rtic::app(device = bsp::pac, dispatchers = [TC4, TC5], peripherals = true)]
 mod app {
@@ -35,19 +34,19 @@ mod app {
 
     #[shared]
     struct Shared {
-        clocks: GenericClockController,
         i2c: bsp::I2c,
         serial: SerialPort<'static, UsbBus>,
         usb: UsbDevice<'static, UsbBus>,
         delay: bsp::hal::delay::Delay,
         bootloader_armed: bool,
         request_sensor: u8,
-        request_pwm: Option<[u16; PWM_ANGLES]>,
+        request_pwm: Option<[u16; 20]>,
         request_led: Option<bool>,
     }
 
     #[local]
     struct Local {
+        display: Ili9488,
         led: Pin<PA02, PushPullOutput>,
     }
 
@@ -66,7 +65,6 @@ mod app {
 
         let pins = bsp::Pins::new(peripherals.port);
         let mut led = pins.a0.into_push_pull_output();
-        let mut voltage = 0;
         led.set_low().unwrap();
         let i2c = bsp::i2c_master(
             &mut clocks,
@@ -75,6 +73,16 @@ mod app {
             &mut peripherals.pm,
             pins.sda,
             pins.scl,
+        );
+
+        let spi = bsp::spi_master(
+            &mut clocks,
+            4.MHz(),
+            peripherals.sercom4,
+            &mut peripherals.pm,
+            pins.sclk,
+            pins.mosi,
+            pins.miso,
         );
 
         let usb_bus: &'static UsbBusAllocator<UsbBus> = cortex_m::singleton!(
@@ -98,14 +106,23 @@ mod app {
             .build();
         let delay = bsp::hal::delay::Delay::new(cx.core.SYST, &mut clocks);
 
+        let mut dcrs_pin = pins.a1.into_push_pull_output();
+        dcrs_pin.set_low().unwrap();
+        let mut led_pin = pins.a2.into_push_pull_output();
+        led_pin.set_low().unwrap();
+        let mut reset_pin = pins.a3.into_push_pull_output();
+        reset_pin.set_low().unwrap();
+
+        let display = Ili9488::new(spi, dcrs_pin, led_pin, reset_pin);
+
         usb_task::spawn().unwrap();
         icm20948_task::spawn().unwrap();
         pca9685_task::spawn().unwrap();
         led_task::spawn().unwrap();
+        display_task::spawn().unwrap();
 
         (
             Shared {
-                clocks,
                 i2c,
                 serial,
                 usb,
@@ -115,13 +132,13 @@ mod app {
                 request_pwm: None,
                 request_led: None,
             },
-            Local { led },
+            Local { led, display },
         )
     }
 
     #[task(priority = 2, shared = [usb, serial, delay, bootloader_armed, request_sensor, request_pwm, request_led])]
     async fn usb_task(mut cx: usb_task::Context) {
-        let mut pwm_payload = [0u8; 2 * PWM_ANGLES];
+        let mut pwm_payload = [0u8; 20];
         let mut pwm_received = None;
 
         (
@@ -153,15 +170,15 @@ mod app {
                     }
                     pwm_received = None;
 
-                    let mut angles = [0u16; PWM_ANGLES];
+                    let mut angles = [0u16; 20];
                     for (angle, bytes) in angles.iter_mut().zip(pwm_payload.chunks_exact(2)) {
                         *angle = u16::from_le_bytes([bytes[0], bytes[1]]);
                     }
                     if let Some(index) = angles.iter().position(|angle| *angle > PWM_MAX_ANGLE) {
                         let address = if index < PWM_CHANNELS {
-                            PWM_ADDRESS_1
+                            PCA9685_ADDRESS_1
                         } else {
-                            PWM_ADDRESS_2
+                            PCA9685_ADDRESS_2
                         };
                         (
                             &mut cx.shared.usb,
@@ -310,8 +327,8 @@ mod app {
 
     #[task(priority = 1, shared = [request_pwm, i2c, delay, usb, serial, bootloader_armed])]
     async fn pca9685_task(mut cx: pca9685_task::Context) {
-        let mut pwm_1 = Pca9685::new(PWM_CHANNELS as u8, PWM_ADDRESS_1);
-        let mut pwm_2 = Pca9685::new(PWM_CHANNELS as u8, PWM_ADDRESS_2);
+        let mut pwm_1 = Pca9685::new(PWM_CHANNELS as u8, PCA9685_ADDRESS_1);
+        let mut pwm_2 = Pca9685::new(PWM_CHANNELS as u8, PCA9685_ADDRESS_2);
         let mut pwm_1_initialized = false;
         let mut pwm_2_initialized = false;
 
@@ -342,9 +359,9 @@ mod app {
                 });
 
             let response = match (result_1, result_2) {
-                (Err(error), _) => &pwm_error_packet(PWM_ADDRESS_1, error)[..],
-                (_, Err(error)) => &pwm_error_packet(PWM_ADDRESS_2, error)[..],
-                (Ok(()), Ok(())) => &[0x20, PWM_ANGLES as u8][..],
+                (Err(error), _) => &pwm_error_packet(PCA9685_ADDRESS_1, error)[..],
+                (_, Err(error)) => &pwm_error_packet(PCA9685_ADDRESS_2, error)[..],
+                (Ok(()), Ok(())) => &[0x20, 20][..],
             };
             (
                 &mut cx.shared.usb,
@@ -364,6 +381,44 @@ mod app {
                 Some(false) => cx.local.led.set_low().unwrap(),
                 None => Mono::delay(5u64.millis()).await,
             }
+        }
+    }
+
+    #[task(priority = 1, shared = [delay, usb, serial, bootloader_armed], local= [display])]
+    async fn display_task(mut cx: display_task::Context) {
+        let mut initialized = false;
+
+        loop {
+            if !initialized {
+                match cx.shared.delay.lock(|delay| cx.local.display.init(delay)) {
+                    Ok(()) => {
+                        initialized = true;
+                        (
+                            &mut cx.shared.usb,
+                            &mut cx.shared.serial,
+                            &mut cx.shared.delay,
+                            &mut cx.shared.bootloader_armed,
+                        )
+                            .lock(|usb, serial, delay, armed| {
+                                wait_ms(usb, serial, delay, armed, 15)
+                            });
+                    }
+                    Err(error) => {
+                        (
+                            &mut cx.shared.usb,
+                            &mut cx.shared.serial,
+                            &mut cx.shared.delay,
+                            &mut cx.shared.bootloader_armed,
+                        )
+                            .lock(|usb, serial, delay, armed| {
+                                send_packet(usb, serial, delay, armed, &display_error(error))
+                            });
+                        continue;
+                    }
+                }
+            }
+
+            Mono::delay(1u64.millis()).await;
         }
     }
 }

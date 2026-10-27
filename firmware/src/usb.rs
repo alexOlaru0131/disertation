@@ -1,5 +1,6 @@
 use crate::{
-    UF2_MAGIC, UF2_MAGIC_ADDRESS, bsp, icm20948::SensorError, pca9685::SensorError as PcaError,
+    UF2_MAGIC, UF2_MAGIC_ADDRESS, bsp, icm20948::SensorError, ili9488::DisplayError,
+    pca9685::SensorError as PcaError,
 };
 use bsp::ehal::{delay::DelayNs as _, i2c::ErrorKind};
 use bsp::hal::usb::UsbBus;
@@ -115,5 +116,17 @@ fn i2c_error_kind(kind: ErrorKind) -> u8 {
         ErrorKind::ArbitrationLoss => 3,
         ErrorKind::Overrun => 4,
         _ => 0,
+    }
+}
+
+pub(crate) fn display_error(error: DisplayError) -> [u8; 3] {
+    match error {
+        DisplayError::Spi(stage) => {
+            let stage = match stage {
+                "write register" => 1,
+                _ => 0,
+            };
+            [0xE1, 1, stage]
+        }
     }
 }
