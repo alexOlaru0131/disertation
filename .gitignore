@@ -16,3 +16,8 @@
 /cod_stm_l452re-p/Middlewares/Third_Party/FreeRTOS/Source
 /firmware/target
 /software/target
+/firmware/stm32_l452re_servo_zero
+/software/Cargo.toml
+/software/cloud/target
+/software/raspi/target
+/software/target-local

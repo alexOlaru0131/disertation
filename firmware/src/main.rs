@@ -8,7 +8,9 @@ mod usb;
 
 use panic_halt as _;
 
-use bsp::hal::gpio::{PA02, Pin, PushPullOutput};
+use bsp::hal::gpio::{
+    Input, PA02, PA07, PA15, PA16, PA18, PA19, PA20, Pin, PullUp, PushPullOutput,
+};
 use bsp::hal::{clock::GenericClockController, prelude::*, usb::UsbBus};
 use feather_m0 as bsp;
 
@@ -41,13 +43,25 @@ mod app {
         bootloader_armed: bool,
         request_sensor: u8,
         request_pwm: Option<[u16; 20]>,
-        request_led: Option<bool>,
+        request_led_on: u8,
+        request_led_off: u8,
+        reqeust_endstops: u8,
     }
 
     #[local]
     struct Local {
         display: Ili9488,
         led: Pin<PA02, PushPullOutput>,
+
+        // pt end stop-uri
+        // dreapta - 9 (PA7), 6 (PA20), 5 (PA15)
+        // stanga - 12 (PA19), 11 (PA16), 10 (PA18)
+        endstop_sd: Pin<PA07, Input<PullUp>>,
+        endstop_d: Pin<PA20, Input<PullUp>>,
+        endstop_fd: Pin<PA15, Input<PullUp>>,
+        endstop_ss: Pin<PA19, Input<PullUp>>,
+        endstop_s: Pin<PA16, Input<PullUp>>,
+        endstop_fs: Pin<PA18, Input<PullUp>>,
     }
 
     #[init]
@@ -106,20 +120,28 @@ mod app {
             .build();
         let delay = bsp::hal::delay::Delay::new(cx.core.SYST, &mut clocks);
 
-        let mut dcrs_pin = pins.a1.into_push_pull_output();
+        let mut dcrs_pin = pins.a2.into_push_pull_output();
         dcrs_pin.set_low().unwrap();
-        let mut led_pin = pins.a2.into_push_pull_output();
-        led_pin.set_low().unwrap();
-        let mut reset_pin = pins.a3.into_push_pull_output();
+        let mut led_pin = pins.a4.into_push_pull_output();
+        led_pin.set_high().unwrap();
+        let mut reset_pin = pins.a1.into_push_pull_output();
         reset_pin.set_low().unwrap();
 
         let display = Ili9488::new(spi, dcrs_pin, led_pin, reset_pin);
+
+        let endstop_sd = pins.d9.into_pull_up_input();
+        let endstop_d = pins.d6.into_pull_up_input();
+        let endstop_fd = pins.d5.into_pull_up_input();
+        let endstop_ss = pins.d12.into_pull_up_input();
+        let endstop_s = pins.d11.into_pull_up_input();
+        let endstop_fs = pins.d10.into_pull_up_input();
 
         usb_task::spawn().unwrap();
         icm20948_task::spawn().unwrap();
         pca9685_task::spawn().unwrap();
         led_task::spawn().unwrap();
         display_task::spawn().unwrap();
+        endstop_task::spawn().unwrap();
 
         (
             Shared {
@@ -129,16 +151,27 @@ mod app {
                 delay,
                 bootloader_armed: false,
                 request_sensor: 0,
+                reqeust_endstops: 0,
                 request_pwm: None,
-                request_led: None,
+                request_led_on: 0,
+                request_led_off: 0,
             },
-            Local { led, display },
+            Local {
+                endstop_sd,
+                endstop_d,
+                endstop_fd,
+                endstop_ss,
+                endstop_s,
+                endstop_fs,
+                led,
+                display,
+            },
         )
     }
 
-    #[task(priority = 2, shared = [usb, serial, delay, bootloader_armed, request_sensor, request_pwm, request_led])]
+    #[task(priority = 2, shared = [usb, serial, delay, bootloader_armed, request_sensor, request_pwm, request_led_on, reqeust_endstops, request_led_off])]
     async fn usb_task(mut cx: usb_task::Context) {
-        let mut pwm_payload = [0u8; 20];
+        let mut pwm_payload = [0u8; 40];
         let mut pwm_received = None;
 
         (
@@ -213,13 +246,13 @@ mod app {
                 if command == 0x20 {
                     pwm_received = Some(0);
                 } else if command == 0x10 {
-                    cx.shared
-                        .request_sensor
-                        .lock(|requested| *requested = requested.saturating_add(1));
-                } else if command == 0x30 || command == 0x35 {
-                    cx.shared
-                        .request_led
-                        .lock(|pending| *pending = Some(command == 0x30));
+                    cx.shared.request_sensor.lock(|requested| *requested = 1);
+                } else if command == 0x30 {
+                    cx.shared.request_led_on.lock(|request| *request = 1);
+                } else if command == 0x40 {
+                    cx.shared.request_led_off.lock(|request| *request = 1);
+                } else if command == 0x50 {
+                    cx.shared.reqeust_endstops.lock(|request| *request = 1);
                 }
             }
             Mono::delay(5u64.millis()).await;
@@ -373,14 +406,24 @@ mod app {
         }
     }
 
-    #[task(priority = 1, shared = [request_led], local = [led])]
+    #[task(priority = 1, shared = [request_led_on, request_led_off], local = [led])]
     async fn led_task(mut cx: led_task::Context) {
         loop {
-            match cx.shared.request_led.lock(|pending| pending.take()) {
-                Some(true) => cx.local.led.set_high().unwrap(),
-                Some(false) => cx.local.led.set_low().unwrap(),
-                None => Mono::delay(5u64.millis()).await,
-            }
+            cx.shared.request_led_on.lock(|request| {
+                if *request == 1 {
+                    cx.local.led.set_high().unwrap();
+                    *request = 0;
+                }
+            });
+
+            cx.shared.request_led_off.lock(|request| {
+                if *request == 1 {
+                    cx.local.led.set_low().unwrap();
+                    *request = 0;
+                }
+            });
+
+            Mono::delay(1u64.millis()).await;
         }
     }
 
@@ -417,6 +460,38 @@ mod app {
                     }
                 }
             }
+
+            Mono::delay(1u64.millis()).await;
+        }
+    }
+
+    #[task(priority = 1, shared = [delay, usb, serial, bootloader_armed, reqeust_endstops], local= [endstop_sd, endstop_d, endstop_fd, endstop_ss, endstop_s, endstop_fs])]
+    async fn endstop_task(mut cx: endstop_task::Context) {
+        loop {
+            cx.shared.reqeust_endstops.lock(|request_endstops| {
+                if *request_endstops == 1 {
+                    let pressed = [
+                        u8::from(cx.local.endstop_sd.is_low().unwrap()),
+                        u8::from(cx.local.endstop_d.is_low().unwrap()),
+                        u8::from(cx.local.endstop_fd.is_low().unwrap()),
+                        u8::from(cx.local.endstop_ss.is_low().unwrap()),
+                        u8::from(cx.local.endstop_s.is_low().unwrap()),
+                        u8::from(cx.local.endstop_fs.is_low().unwrap()),
+                    ];
+
+                    (
+                        &mut cx.shared.usb,
+                        &mut cx.shared.serial,
+                        &mut cx.shared.delay,
+                        &mut cx.shared.bootloader_armed,
+                    )
+                        .lock(|usb, serial, delay, armed| {
+                            send_packet(usb, serial, delay, armed, &pressed)
+                        });
+
+                    *request_endstops = 0;
+                }
+            });
 
             Mono::delay(1u64.millis()).await;
         }

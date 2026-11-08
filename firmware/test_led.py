@@ -45,7 +45,7 @@ def main():
             else:
                 on_confirmed = confirm("LED-ul de pe A0 este aprins?")
         finally:
-            port.write(b"\x35")
+            port.write(b"\x40")
             port.flush()
 
         time.sleep(0.1)

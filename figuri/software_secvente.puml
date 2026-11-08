@@ -5,6 +5,8 @@ box "ESP32" #White
 end box
 
 box "Raspberry Pi" #LightBlue
+  participant "Reasoning Process"
+  participant "Kinematics Process"
   participant "Server Process"
   participant "USB Process"
 end box
@@ -24,7 +26,7 @@ participant ICM20948
 participant "LED (A0)"
 participant ILI9488
 
-"Server Process" -> "USB Process": spawn()
+
 "Scheduler" -> "USB Task": spawn()
 "Scheduler" -> "IMU Task": spawn()
 "IMU Task" -> ICM20948: new()
@@ -39,6 +41,17 @@ participant ILI9488
 "IMU Task" -> ICM20948: init()
 "Display Task" -> ILI9488: init()
 
+note over "USB Task"
+  ar merge un mesaj de confirmare ca a pornit firmware-ul sau un break
+end note
+
+"Server Process" -> "USB Process": spawn()
+"Server Process" -> "Kinematics Process": spawn()
+"Server Process" -> "Reasoning Process": spawn()
+
+"Kinematics Process" -> "Kinematics Process": load control params
+"Reasoning Process" -> "Reasoning Process": load reasoning params
+
 loop 
 
   "USB Task" -> "USB Task": poll_usb()
@@ -51,59 +64,136 @@ loop
     else Err(error)
 
       "IMU Task" -> "USB Process": icm20948_init_error
+      note right
+          ce facem cu eroarea?
+        end note
 
     end
 
+  alt Mission: move to target
 
-  alt 0x20
+    "Reasoning Process" -> "Reasoning Process": set mission: move
+    "Reasoning Process" -> "Kinematics Process": send target point
 
-    "USB Process" -> "USB Task": 0x20, pwm values
-    "USB Task" --> "USB Process": 0xE1
-    "USB Task" -> "USB Task": delay(5 ms)
-    "PWM Controllers Task" -> "Scheduler": lock pwm values
-    "PWM Controllers Task" -> "PCA9685 1": update_pwm()
-    "PWM Controllers Task" -> "PCA9685 2": update_pwm()
-    "PWM Controllers Task" -> "Scheduler": lock usb
+    loop until reached position
 
-    alt Ok(())
+      alt request imu
 
-      "PWM Controllers Task" -> "USB Process": [0x20; 20][..]
+        "Kinematics Process" -> "USB Process": request imu
 
-    else Err(error)
+        "USB Process" -> "USB Task": 0x10
 
-      "PWM Controllers Task" -> "USB Process": pca9685_error_packet
+        note right
+          trebuie pus raspuns ca a fost primita comanda
+        end note
+
+        "USB Task" -> "Scheduler": request imu
+        "USB Task" -> "USB Task": delay(5 ms)
+        "IMU Task" -> "Scheduler": lock i2c
+        "IMU Task" -> ICM20948: read_measurements()
+        "IMU Task" -> "Scheduler": lock usb
+
+        alt Ok(())
+
+          "IMU Task" -> "USB Process": imu values
+          "Kinematics Process" <- "USB Process": imu values
+          "Kinematics Process" -> "Kinematics Process": compute current x y z position
+          "Kinematics Process" -> "Kinematics Process": compute next x y z position
+          "Kinematics Process" -> "Kinematics Process": prepare move motors
+
+        else Err(error)
+
+          "IMU Task" -> "USB Process": icm20948_error_packet
+          "Kinematics Process" <- "USB Process": error
+
+        end
+
+        "IMU Task" -> "IMU Task": delay(1 ms)
+
+      else move legs
+
+        "Kinematics Process" -> "Kinematics Process": compute inverse kinematics
+        "Kinematics Process" -> "USB Process": send pwm values
+        "USB Process" -> "USB Task": 0x20, pwm values
+        "USB Task" --> "USB Process": 0xE1
+        note right
+          aici va fi schimbat, trebuie sa fie un raspuns exact
+        end note
+        "USB Task" -> "USB Task": delay(5 ms)
+        "PWM Controllers Task" -> "Scheduler": lock pwm values
+        "PWM Controllers Task" -> "PCA9685 1": update_pwm()
+        "PWM Controllers Task" -> "PCA9685 2": update_pwm()
+        "PWM Controllers Task" -> "Scheduler": lock usb
+
+        alt Ok(())
+
+          "PWM Controllers Task" -> "USB Process": [0x20; 20][..]
+
+        note right
+          pentru ca asta nu prea face sens si e prea lung
+        end note
+
+        "Kinematics Process" <- "USB Process": ok
+        "Kinematics Process" -> "Kinematics Process": prepare imu request
+
+        else Err(error)
+
+          "PWM Controllers Task" -> "USB Process": pca9685_error_packet
+          "Kinematics Process" <- "USB Process": error
+
+        end
+
+      "PWM Controllers Task" -> "PWM Controllers Task": delay(5 ms)
+
+    else use camera
+
+      "Reasoning Process" -> "Kinematics Process": send camera position
+      "Kinematics Process" -> "Kinematics Process": compute inverse kinematics for camera
+      "Kinematics Process" -> "USB Process": send pwm values
+
+      "USB Process" -> "USB Task": 0x20, pwm values
+      "USB Task" --> "USB Process": 0xE1
+      note right
+        aici va fi schimbat, trebuie sa fie un raspuns exact
+      end note
+      "USB Task" -> "USB Task": delay(5 ms)
+      "PWM Controllers Task" -> "Scheduler": lock pwm values
+      "PWM Controllers Task" -> "PCA9685 1": update_pwm()
+      "PWM Controllers Task" -> "PCA9685 2": update_pwm()
+      "PWM Controllers Task" -> "Scheduler": lock usb
+
+      alt Ok(())
+
+        "PWM Controllers Task" -> "USB Process": [0x20; 20][..]
+
+      note right
+        pentru ca asta nu prea face sens si e prea lung
+      end note
+
+      "Kinematics Process" <- "USB Process": ok
+
+      else Err(error)
+
+        "PWM Controllers Task" -> "USB Process": pca9685_error_packet
+        "Kinematics Process" <- "USB Process": error
+
+      end
+
+
+      "USB Process" -> "USB Task": 0x30
+
+      note right
+        trebuie pus raspuns ca a fost primita comanda
+      end note
+
+      "USB Task" -> "Scheduler": request led
+      "USB Task" -> "USB Task": delay(5 ms)
+      "LED Task" -> "LED (A0)": on/off
+      "LED Task" -> "LED Task": delay(5 ms)
+
+      end
 
     end
-
-  "PWM Controllers Task" -> "PWM Controllers Task": delay(5 ms)
-
-  else 0x10
-
-    "USB Process" -> "USB Task": 0x10
-    "USB Task" -> "Scheduler": request imu
-    "USB Task" -> "USB Task": delay(5 ms)
-    "IMU Task" -> "Scheduler": lock i2c
-    "IMU Task" -> ICM20948: read_measurements()
-    "IMU Task" -> "Scheduler": lock usb
-
-    alt Ok(())
-
-      "IMU Task" -> "USB Process": imu values
-
-    else Err(error)
-
-      "IMU Task" -> "USB Process": icm20948_error_packet
-    end
-
-    "IMU Task" -> "IMU Task": delay(1 ms)
-
-  else 0x30
-
-    "USB Process" -> "USB Task": 0x30
-    "USB Task" -> "Scheduler": request led
-    "USB Task" -> "USB Task": delay(5 ms)
-    "LED Task" -> "LED (A0)": on/off
-    "LED Task" -> "LED Task": delay(5 ms)
 
   end
 

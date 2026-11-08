@@ -25,3 +25,5 @@ done
 sleep 5s
 
 python3 test_led.py --no-confirm
+
+python3 test_endstops.py --port "$app_port"

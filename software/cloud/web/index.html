@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ro">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hexapod · Vizualizare și posturi</title>
+    <link rel="stylesheet" href="/style.css">
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Hexapod</h1>
+      <nav aria-label="Mod de lucru">
+        <button id="live-tab" type="button" aria-pressed="true">Live</button>
+        <button id="editor-tab" type="button" aria-pressed="false">Editor posturi</button>
+      </nav>
+      <span id="connection" role="status">Conectare...</span>
+    </header>
+
+    <main id="workspace">
+      <section class="viewport" aria-label="Robot în coordonate globale, metri">
+        <canvas id="scene" aria-label="Robot 3D: rotire, pan și zoom"></canvas>
+        <p id="empty">Aștept primul mesaj STATE...</p>
+        <div class="view-tools">
+          <small id="view-help">Stânga: rotire · Dreapta / Shift: pan · Rotiță: zoom</small>
+          <button id="reset-view" type="button">Centrează</button>
+        </div>
+      </section>
+
+      <aside id="editor-panel" hidden aria-label="Configurare postură">
+        <header class="editor-header">
+          <h2>Postură</h2>
+          <button id="copy-state" type="button" disabled>Preia STATE</button>
+        </header>
+        <fieldset id="editor-controls" disabled>
+          <label for="component">Componentă</label>
+          <select id="component"><option value="body">Corp</option></select>
+          <label for="drag-plane">Plan de tragere (global)</label>
+          <select id="drag-plane">
+            <option value="xy">XY</option>
+            <option value="xz">XZ</option>
+            <option value="yz">YZ</option>
+          </select>
+          <fieldset>
+            <legend id="position-label">Poziție globală (m)</legend>
+            <div id="position-fields" class="fields"></div>
+          </fieldset>
+          <fieldset id="rotation-group">
+            <legend>Rotație XYZ (°)</legend>
+            <div id="rotation-fields" class="fields"></div>
+          </fieldset>
+        </fieldset>
+        <p id="editor-message" role="status">Preia un STATE pentru a configura postura.</p>
+        <table>
+          <caption>Vârfuri · local corp (m)</caption>
+          <thead><tr><th>Picior</th><th>X</th><th>Y</th><th>Z</th></tr></thead>
+          <tbody id="feet-positions"></tbody>
+        </table>
+        <button id="export-pose" type="button" disabled>Exportă pozițiile JSON</button>
+      </aside>
+    </main>
+  </body>
+</html>

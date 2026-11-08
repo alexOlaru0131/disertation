@@ -3,7 +3,7 @@ use feather_m0::{
     Spi,
     hal::delay::Delay,
     hal::ehal::{delay::DelayNs, digital::OutputPin},
-    hal::gpio::{PA02, PA04, PB08, PB09, Pin, PushPullOutput},
+    hal::gpio::{PA05, PB08, PB09, Pin, PushPullOutput},
 };
 
 const SOFTWARE_RESET: u8 = 0x01;
@@ -57,22 +57,25 @@ pub enum DrawingTask {
     },
 }
 
+// RESET - A1
+// DC/RS - A2
+// LED - A4
 pub struct Ili9488 {
     width: u16,
     height: u16,
 
-    dcrs_pin: Pin<PB08, PushPullOutput>,
-    led_pin: Pin<PB09, PushPullOutput>,
-    reset_pin: Pin<PA04, PushPullOutput>,
+    dcrs_pin: Pin<PB09, PushPullOutput>,
+    led_pin: Pin<PA05, PushPullOutput>,
+    reset_pin: Pin<PB08, PushPullOutput>,
     spi: Spi,
 }
 
 impl Ili9488 {
     pub fn new(
         spi: Spi,
-        dcrs_pin: Pin<PB08, PushPullOutput>,
-        led_pin: Pin<PB09, PushPullOutput>,
-        reset_pin: Pin<PA04, PushPullOutput>,
+        dcrs_pin: Pin<PB09, PushPullOutput>,
+        led_pin: Pin<PA05, PushPullOutput>,
+        reset_pin: Pin<PB08, PushPullOutput>,
     ) -> Self {
         Self {
             width: 480,
