@@ -1,132 +1,142 @@
-use crate::{
-    UF2_MAGIC, UF2_MAGIC_ADDRESS, bsp, icm20948::SensorError, ili9488::DisplayError,
-    pca9685::SensorError as PcaError,
+use crate::Command;
+use serde::{Deserialize, Serialize};
+use serialport::SerialPort;
+use std::{
+    io,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::Duration,
 };
-use bsp::ehal::{delay::DelayNs as _, i2c::ErrorKind};
-use bsp::hal::usb::UsbBus;
-use usb_device::prelude::UsbDevice;
-use usbd_serial::SerialPort;
+use tokio::sync::{mpsc, oneshot};
 
-pub(crate) fn poll_usb(
-    usb: &mut UsbDevice<'_, UsbBus>,
-    serial: &mut SerialPort<'_, UsbBus>,
-    armed: &mut bool,
-) {
-    usb.poll(&mut [serial]);
+const MAX_LINE: usize = 4096;
 
-    if serial.line_coding().data_rate() == 1200 {
-        if serial.dtr() {
-            *armed = true;
-        } else if *armed {
-            unsafe { core::ptr::write_volatile(UF2_MAGIC_ADDRESS, UF2_MAGIC) };
-            cortex_m::peripheral::SCB::sys_reset();
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Request {
+    ReadImu { id: u64 },
+    SetPwm { id: u64, angles: Vec<u16> },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Response {
+    Imu { id: u64, values: [i32; 10] },
+    Ack { id: u64 },
+    Error { id: u64, message: String },
+}
+
+impl Response {
+    fn error(id: u64, message: impl Into<String>) -> Self {
+        Self::Error {
+            id,
+            message: message.into(),
         }
-    } else {
-        *armed = false;
     }
 }
 
-pub(crate) fn wait_ms(
-    usb: &mut UsbDevice<'_, UsbBus>,
-    serial: &mut SerialPort<'_, UsbBus>,
-    delay: &mut bsp::hal::delay::Delay,
-    armed: &mut bool,
-    ms: u32,
-) {
-    for _ in 0..ms {
-        poll_usb(usb, serial, armed);
-        delay.delay_ms(1u32);
-    }
-}
+fn handle_request(line: &[u8], tx: &mpsc::Sender<Command>) -> Response {
+    let request: Request = match serde_json::from_slice(line) {
+        Ok(request) => request,
+        Err(error) => return Response::error(0, format!("comanda invalida: {error}")),
+    };
 
-pub(crate) fn send_packet(
-    usb: &mut UsbDevice<'_, UsbBus>,
-    serial: &mut SerialPort<'_, UsbBus>,
-    delay: &mut bsp::hal::delay::Delay,
-    armed: &mut bool,
-    data: &[u8],
-) {
-    let mut pending = data;
-    for _ in 0..50 {
-        if pending.is_empty() {
-            break;
+    match request {
+        Request::ReadImu { id } => {
+            let (reply, answer) = oneshot::channel();
+            if tx.blocking_send(Command::ReadImu(reply)).is_err() {
+                return Response::error(id, "workerul I2C este oprit");
+            }
+            match answer.blocking_recv() {
+                Ok(Ok(values)) => Response::Imu { id, values },
+                Ok(Err(error)) => Response::error(id, error),
+                Err(_) => Response::error(id, "workerul I2C nu a raspuns"),
+            }
         }
-        poll_usb(usb, serial, armed);
-        if let Ok(count) = serial.write(pending) {
-            pending = &pending[count..];
+        Request::SetPwm { id, angles } => {
+            if angles.len() != 20 || angles.iter().any(|&angle| angle > 36_000) {
+                return Response::error(id, "sunt necesare 20 de unghiuri intre 0 si 36000");
+            }
+            let mut pwm = [0u16; 20];
+            pwm.copy_from_slice(&angles);
+            let (reply, answer) = oneshot::channel();
+            if tx.blocking_send(Command::SetPwm(pwm, reply)).is_err() {
+                return Response::error(id, "workerul I2C este oprit");
+            }
+            match answer.blocking_recv() {
+                Ok(Ok(())) => Response::Ack { id },
+                Ok(Err(error)) => Response::error(id, error),
+                Err(_) => Response::error(id, "workerul I2C nu a raspuns"),
+            }
         }
-        delay.delay_ms(1u32);
     }
 }
 
-pub(crate) fn error_packet(error: SensorError) -> [u8; 4] {
-    match error {
-        SensorError::I2c(stage, kind) => {
-            let stage = match stage {
-                "select bank" => 1,
-                "read register" => 2,
-                "wake" => 3,
-                "enable axes" => 4,
-                "accel config" => 5,
-                "gyro config" => 6,
-                "disable aux master" => 7,
-                "mag bypass" => 8,
-                "mag identity" => 9,
-                "mag continuous" => 10,
-                "read accel/gyro/temp" => 11,
-                "read magnetometer" => 12,
-                _ => 0,
-            };
-            [0xE0, 1, stage, i2c_error_kind(kind)]
+fn send_response(port: &mut dyn SerialPort, response: &Response) -> io::Result<()> {
+    let mut message = serde_json::to_vec(response).map_err(io::Error::other)?;
+    message.push(b'\n');
+    port.write_all(&message)?;
+    port.flush()
+}
+
+fn read_commands(
+    port: &mut dyn SerialPort,
+    tx: &mpsc::Sender<Command>,
+    stop: &AtomicBool,
+) -> io::Result<()> {
+    let mut buffer = [0u8; 256];
+    let mut line = Vec::new();
+    let mut oversized = false;
+
+    while !stop.load(Ordering::Relaxed) {
+        match port.read(&mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(count) => {
+                for &byte in &buffer[..count] {
+                    if byte == b'\n' {
+                        if oversized {
+                            send_response(port, &Response::error(0, "comanda prea lunga"))?;
+                        } else if !line.is_empty() {
+                            send_response(port, &handle_request(&line, tx))?;
+                        }
+                        line.clear();
+                        oversized = false;
+                    } else if !oversized {
+                        if line.len() == MAX_LINE {
+                            oversized = true;
+                        } else {
+                            line.push(byte);
+                        }
+                    }
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => {}
+            Err(error) => return Err(error),
         }
-        SensorError::WrongId(id) => [0xE0, 2, id, 0],
-        SensorError::WrongBank(bank) => [0xE0, 3, bank, 0],
-        SensorError::WrongAccelConfig(setting) => [0xE0, 4, setting, 0],
-        SensorError::WrongMagId(id) => [0xE0, 5, id, 0],
-        SensorError::MagNotReady => [0xE0, 6, 0, 0],
-        SensorError::MagOverflow => [0xE0, 7, 0, 0],
-        SensorError::WrongGyroConfig(setting) => [0xE0, 8, setting, 0],
     }
+    Ok(())
 }
 
-pub(crate) fn pwm_error_packet(address: u8, error: PcaError) -> [u8; 5] {
-    match error {
-        PcaError::I2c(stage, kind) => {
-            let stage = match stage {
-                "read register" => 1,
-                "mode2 outdrv" => 2,
-                "mode1 sleep" => 3,
-                "pre scale" => 4,
-                "mode1 wake" => 5,
-                "mode1 restart" => 6,
-                "set pwm" => 7,
-                _ => 0,
-            };
-            [0xE1, address, 1, stage, i2c_error_kind(kind)]
+pub fn serve(tx: mpsc::Sender<Command>, stop: Arc<AtomicBool>) {
+    let path = std::env::var("ROBOT_USB_PORT").unwrap_or_else(|_| "/dev/ttyGS0".into());
+
+    while !stop.load(Ordering::Relaxed) {
+        match serialport::new(&path, 115_200)
+            .timeout(Duration::from_millis(250))
+            .open()
+        {
+            Ok(mut port) => {
+                if let Err(error) = read_commands(port.as_mut(), &tx, &stop) {
+                    eprintln!("USB {path}: {error}");
+                }
+            }
+            Err(error) => eprintln!("USB {path}: {error}"),
         }
-        PcaError::InvalidServoCount(count) => [0xE1, address, 2, count, 0],
-        PcaError::InvalidPwmCount(count) => [0xE1, address, 3, count as u8, 0],
-    }
-}
-
-fn i2c_error_kind(kind: ErrorKind) -> u8 {
-    match kind {
-        ErrorKind::NoAcknowledge(_) => 1,
-        ErrorKind::Bus => 2,
-        ErrorKind::ArbitrationLoss => 3,
-        ErrorKind::Overrun => 4,
-        _ => 0,
-    }
-}
-
-pub(crate) fn display_error(error: DisplayError) -> [u8; 3] {
-    match error {
-        DisplayError::Spi(stage) => {
-            let stage = match stage {
-                "write register" => 1,
-                _ => 0,
-            };
-            [0xE1, 1, stage]
+        if !stop.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_secs(1));
         }
     }
 }

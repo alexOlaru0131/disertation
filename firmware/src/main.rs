@@ -1,17 +1,18 @@
 use icm20948::Icm20948;
 use pca9685::Pca9685;
-use tokio::{
-    sync::mpsc,
-    time::{Duration, interval},
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
+use tokio::sync::{mpsc, oneshot};
 
 pub mod icm20948;
 pub mod pca9685;
+mod usb;
 
-#[derive(Debug, Clone, Copy)]
-enum Command {
-    ReadImu,
-    SetPwm([u16; 20]),
+pub(crate) enum Command {
+    ReadImu(oneshot::Sender<Result<[i32; 10], String>>),
+    SetPwm([u16; 20], oneshot::Sender<Result<(), String>>),
     Shutdown,
 }
 
@@ -30,17 +31,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             while let Some(command) = rx.blocking_recv() {
                 match command {
-                    Command::ReadImu => match imu.read_measurements() {
-                        Ok(measurements) => println!("{:?}", measurements.values),
-                        Err(error) => eprintln!("error at imu read {error:?}"),
-                    },
-                    Command::SetPwm(angles) => {
+                    Command::ReadImu(reply) => {
+                        let result = imu
+                            .read_measurements()
+                            .map(|measurements| measurements.values)
+                            .map_err(|error| error.to_string());
+                        let _ = reply.send(result);
+                    }
+                    Command::SetPwm(angles, reply) => {
+                        let mut errors = Vec::new();
                         if let Err(error) = pca42.set_pwm_vals(&angles[..10]) {
-                            eprintln!("error at PCA 0x42: {error:?}");
+                            errors.push(format!("PCA 0x42: {error}"));
                         }
                         if let Err(error) = pca41.set_pwm_vals(&angles[10..]) {
-                            eprintln!("error at PCA 0x41: {error:?}");
+                            errors.push(format!("PCA 0x41: {error}"));
                         }
+                        let result = if errors.is_empty() {
+                            Ok(())
+                        } else {
+                            Err(errors.join("; "))
+                        };
+                        let _ = reply.send(result);
                     }
                     Command::Shutdown => break,
                 }
@@ -49,47 +60,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         },
     );
 
-    let imu_tx = tx.clone();
-    let imu_task = tokio::spawn(async move {
-        let mut tick = interval(Duration::from_millis(500));
-        loop {
-            tick.tick().await;
-            if imu_tx.send(Command::ReadImu).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    let pwm_tx = tx.clone();
-    let pwm_task = tokio::spawn(async move {
-        let mut tick = interval(Duration::from_millis(150));
-        loop {
-            for angle in (0..=9_000u16)
-                .step_by(500)
-                .chain((500..9_000u16).step_by(500).rev())
-            {
-                tick.tick().await;
-                if pwm_tx.send(Command::SetPwm([angle; 20])).await.is_err() {
-                    return;
-                }
-            }
-        }
+    let stop = Arc::new(AtomicBool::new(false));
+    let usb_thread = std::thread::spawn({
+        let stop = Arc::clone(&stop);
+        let tx = tx.clone();
+        move || usb::serve(tx, stop)
     });
 
     let result = tokio::select! {
         result = &mut i2c_thread => result?,
         signal = tokio::signal::ctrl_c() => {
             signal?;
-            imu_task.abort();
-            pwm_task.abort();
+            stop.store(true, Ordering::Relaxed);
             let _ = tx.send(Command::Shutdown).await;
             i2c_thread.await?
         }
     };
-    imu_task.abort();
-    pwm_task.abort();
-    let _ = imu_task.await;
-    let _ = pwm_task.await;
+    stop.store(true, Ordering::Relaxed);
+    usb_thread.join().expect("USB thread panicked");
     result?;
 
     Ok(())
