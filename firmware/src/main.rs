@@ -1,4 +1,3 @@
-use i2cdev::{core::I2CDevice, linux::LinuxI2CDevice};
 use icm20948::Icm20948;
 use tokio::{
     sync::mpsc,
@@ -14,16 +13,12 @@ enum Command {
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (tx, mut rx) = mpsc::channel::<Command>(32);
 
-    let i2c_thread = tokio::task::spawn_blocking(move || {
-        let mut imu = Icm20948::default();
-
-        if let Err(error) = imu.init() {
-            eprintln!("error at imu init {error:?}");
-            return;
-        }
+    let mut i2c_thread = tokio::task::spawn_blocking(move || {
+        let mut imu = Icm20948::new()?;
+        imu.init()?;
 
         while let Some(command) = rx.blocking_recv() {
             match command {
@@ -34,6 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Command::Shutdown => break,
             }
         }
+        Ok::<(), icm20948::SensorError>(())
     });
 
     let imu_tx = tx.clone();
@@ -47,11 +43,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    tokio::signal::ctrl_c().await?;
-    let _ = tx.send(Command::Shutdown).await;
-
-    i2c_thread.await?;
-    imu_task.await?;
+    let result = tokio::select! {
+        result = &mut i2c_thread => result?,
+        signal = tokio::signal::ctrl_c() => {
+            signal?;
+            imu_task.abort();
+            let _ = tx.send(Command::Shutdown).await;
+            i2c_thread.await?
+        }
+    };
+    imu_task.abort();
+    let _ = imu_task.await;
+    result?;
 
     Ok(())
 }

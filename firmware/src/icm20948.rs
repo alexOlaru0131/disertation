@@ -1,22 +1,37 @@
 use i2cdev::{
     core::I2CDevice,
-    linux::{LinuxI2CDevice, LinuxI2CError as Error},
+    linux::{LinuxI2CDevice, LinuxI2CError},
 };
+use std::{fmt, thread, time::Duration};
 
 const WHO_AM_I: u8 = 0x00;
 const PWR_MGMT_1: u8 = 0x06;
 const PWR_MGMT_2: u8 = 0x07;
 const USER_CTRL: u8 = 0x03;
 const INT_PIN_CFG: u8 = 0x0F;
+const I2C_MST_STATUS: u8 = 0x17;
 const ACCEL_XOUT_H: u8 = 0x2D;
 const GYRO_CONFIG_1: u8 = 0x01;
 const ACCEL_CONFIG: u8 = 0x14;
 const REG_BANK_SEL: u8 = 0x7F;
+const I2C_MST_ODR_CONFIG: u8 = 0x00;
+const I2C_MST_CTRL: u8 = 0x01;
+const I2C_MST_DELAY_CTRL: u8 = 0x02;
+const I2C_SLV0_ADDR: u8 = 0x03;
+const I2C_SLV0_REG: u8 = 0x04;
+const I2C_SLV0_CTRL: u8 = 0x05;
+const I2C_SLV4_ADDR: u8 = 0x13;
+const I2C_SLV4_REG: u8 = 0x14;
+const I2C_SLV4_CTRL: u8 = 0x15;
+const I2C_SLV4_DO: u8 = 0x16;
+const I2C_SLV4_DI: u8 = 0x17;
+const MAG_ADDRESS: u8 = 0x0C;
 const MAG_WIA2: u8 = 0x01;
 const MAG_ST1: u8 = 0x10;
 const MAG_CNTL2: u8 = 0x31;
 const BANK_0: u8 = 0x00;
 const BANK_2: u8 = 0x20;
+const BANK_3: u8 = 0x30;
 const EXPECTED_ID: u8 = 0xEA;
 const ACCEL_16G: u8 = 0x06;
 const GYRO_2000DPS: u8 = 0x06;
@@ -27,31 +42,40 @@ pub struct Measurements {
 
 #[derive(Debug)]
 pub enum SensorError {
-    I2c(&'static str, Error),
+    I2c(&'static str, LinuxI2CError),
     WrongId(u8),
     WrongBank(u8),
     WrongAccelConfig(u8),
     WrongGyroConfig(u8),
     WrongMagId(u8),
+    MagNoAck(u8),
+    MagLostArbitration(u8),
+    MagTimeout,
     MagNotReady,
     MagOverflow,
+    ShortRead(&'static str, usize),
 }
 
-pub struct Icm20948 {
-    i2c_imu: LinuxI2CDevice,
-    i2c_mag: LinuxI2CDevice,
-}
-
-impl Default for Icm20948 {
-    fn default() -> Self {
-        Self {
-            i2c_imu: LinuxI2CDevice::new("/dev/i2c-1", 0x69).expect("IMU"),
-            i2c_mag: LinuxI2CDevice::new("/dev/i2c-1", 0x0C).expect("MAG"),
-        }
+impl fmt::Display for SensorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
     }
 }
 
+impl std::error::Error for SensorError {}
+
+pub struct Icm20948 {
+    i2c_imu: LinuxI2CDevice,
+}
+
 impl Icm20948 {
+    pub fn new() -> Result<Self, SensorError> {
+        Ok(Self {
+            i2c_imu: LinuxI2CDevice::new("/dev/i2c-1", 0x69)
+                .map_err(|e| SensorError::I2c("open IMU", e))?,
+        })
+    }
+
     fn select_bank(&mut self, bank: u8) -> Result<(), SensorError> {
         self.i2c_imu
             .smbus_write_byte_data(REG_BANK_SEL, bank)
@@ -64,10 +88,57 @@ impl Icm20948 {
             .map_err(|e| SensorError::I2c("read IMU register", e))
     }
 
-    fn read_mag_reg(&mut self, reg: u8) -> Result<u8, SensorError> {
-        self.i2c_mag
-            .smbus_read_byte_data(reg)
-            .map_err(|e| SensorError::I2c("read magnetometer register", e))
+    fn write_imu_reg(
+        &mut self,
+        reg: u8,
+        value: u8,
+        stage: &'static str,
+    ) -> Result<(), SensorError> {
+        self.i2c_imu
+            .smbus_write_byte_data(reg, value)
+            .map_err(|e| SensorError::I2c(stage, e))
+    }
+
+    // SLV4 executes a single auxiliary-bus read or write through the ICM.
+    // The Pi only communicates with the ICM at address 0x69.
+    fn mag_transaction(&mut self, reg: u8, write: Option<u8>) -> Result<u8, SensorError> {
+        let _ = self.read_imu_reg(I2C_MST_STATUS)?;
+        self.select_bank(BANK_3)?;
+        let setup = (|| {
+            if let Some(value) = write {
+                self.write_imu_reg(I2C_SLV4_DO, value, "aux write data")?;
+            }
+            let address = MAG_ADDRESS | if write.is_none() { 0x80 } else { 0 };
+            self.write_imu_reg(I2C_SLV4_ADDR, address, "aux slave address")?;
+            self.write_imu_reg(I2C_SLV4_REG, reg, "aux register")?;
+            self.write_imu_reg(I2C_SLV4_CTRL, 0x80, "aux start transaction")
+        })();
+        let restore = self.select_bank(BANK_0);
+        setup?;
+        restore?;
+
+        for _ in 0..50 {
+            let status = self.read_imu_reg(I2C_MST_STATUS)?;
+            if status & 0x10 != 0 {
+                return Err(SensorError::MagNoAck(status));
+            }
+            if status & 0x20 != 0 {
+                return Err(SensorError::MagLostArbitration(status));
+            }
+            if status & 0x40 != 0 {
+                if write.is_some() {
+                    return Ok(0);
+                }
+                self.select_bank(BANK_3)?;
+                let value = self.read_imu_reg(I2C_SLV4_DI);
+                let restore = self.select_bank(BANK_0);
+                let value = value?;
+                restore?;
+                return Ok(value);
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        Err(SensorError::MagTimeout)
     }
 
     pub fn init(&mut self) -> Result<(), SensorError> {
@@ -114,32 +185,51 @@ impl Icm20948 {
         config?;
         restore?;
 
-        self.i2c_imu
-            .smbus_write_byte_data(USER_CTRL, 0x00)
-            .map_err(|e| SensorError::I2c("disable aux master", e))?;
-        self.i2c_imu
-            .smbus_write_byte_data(INT_PIN_CFG, 0x02)
-            .map_err(|e| SensorError::I2c("mag bypass", e))?;
-        let mag_id = self.read_mag_reg(MAG_WIA2)?;
+        self.write_imu_reg(INT_PIN_CFG, 0x00, "disable aux bypass")?;
+        self.write_imu_reg(USER_CTRL, 0x20, "enable aux master")?;
+        self.select_bank(BANK_3)?;
+        let setup = self.write_imu_reg(I2C_MST_CTRL, 0x17, "aux master clock");
+        let restore = self.select_bank(BANK_0);
+        setup?;
+        restore?;
+
+        let mag_id = self.mag_transaction(MAG_WIA2, None)?;
         if mag_id != 0x09 {
             return Err(SensorError::WrongMagId(mag_id));
         }
-        self.i2c_mag
-            .smbus_write_byte_data(MAG_CNTL2, 0x08)
-            .map_err(|e| SensorError::I2c("mag continuous", e))?;
+        self.mag_transaction(MAG_CNTL2, Some(0x00))?;
+        thread::sleep(Duration::from_millis(2));
+        self.mag_transaction(MAG_CNTL2, Some(0x08))?;
+
+        // SLV0 periodically copies ST1, XYZ and ST2 into bank 0 at 0x3B.
+        // Slow its polling below the magnetometer's 100 Hz output rate.
+        self.select_bank(BANK_3)?;
+        let setup = (|| {
+            self.write_imu_reg(I2C_MST_ODR_CONFIG, 0x05, "aux sample rate")?;
+            self.write_imu_reg(I2C_MST_DELAY_CTRL, 0x01, "aux slave delay")?;
+            self.write_imu_reg(I2C_SLV0_ADDR, 0x80 | MAG_ADDRESS, "aux read address")?;
+            self.write_imu_reg(I2C_SLV0_REG, MAG_ST1, "aux read register")?;
+            self.write_imu_reg(I2C_SLV0_CTRL, 0x80 | 9, "aux read length")
+        })();
+        let restore = self.select_bank(BANK_0);
+        setup?;
+        restore?;
+        thread::sleep(Duration::from_millis(40));
         Ok(())
     }
 
     pub fn read_measurements(&mut self) -> Result<Measurements, SensorError> {
-        let data = self
+        // 14 bytes of acceleration/gyro/temperature followed by 9 bytes
+        // copied from the AK09916 via the internal auxiliary master.
+        let frame = self
             .i2c_imu
-            .smbus_read_i2c_block_data(ACCEL_XOUT_H, 14)
+            .smbus_read_i2c_block_data(ACCEL_XOUT_H, 23)
             .map_err(|e| SensorError::I2c("read accel/gyro/temp", e))?;
-
-        let mag_data = self
-            .i2c_mag
-            .smbus_read_i2c_block_data(MAG_ST1, 9)
-            .map_err(|e| SensorError::I2c("read magnetometer", e))?;
+        if frame.len() != 23 {
+            return Err(SensorError::ShortRead("measurements", frame.len()));
+        }
+        let data = &frame[..14];
+        let mag_data = &frame[14..];
         if mag_data[0] & 1 == 0 {
             return Err(SensorError::MagNotReady);
         }
