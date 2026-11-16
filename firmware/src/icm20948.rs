@@ -99,8 +99,6 @@ impl Icm20948 {
             .map_err(|e| SensorError::I2c(stage, e))
     }
 
-    // SLV4 executes a single auxiliary-bus read or write through the ICM.
-    // The Pi only communicates with the ICM at address 0x69.
     fn mag_transaction(&mut self, reg: u8, write: Option<u8>) -> Result<u8, SensorError> {
         let _ = self.read_imu_reg(I2C_MST_STATUS)?;
         self.select_bank(BANK_3)?;
@@ -201,8 +199,6 @@ impl Icm20948 {
         thread::sleep(Duration::from_millis(2));
         self.mag_transaction(MAG_CNTL2, Some(0x08))?;
 
-        // SLV0 periodically copies ST1, XYZ and ST2 into bank 0 at 0x3B.
-        // Slow its polling below the magnetometer's 100 Hz output rate.
         self.select_bank(BANK_3)?;
         let setup = (|| {
             self.write_imu_reg(I2C_MST_ODR_CONFIG, 0x05, "aux sample rate")?;
@@ -219,8 +215,6 @@ impl Icm20948 {
     }
 
     pub fn read_measurements(&mut self) -> Result<Measurements, SensorError> {
-        // 14 bytes of acceleration/gyro/temperature followed by 9 bytes
-        // copied from the AK09916 via the internal auxiliary master.
         let frame = self
             .i2c_imu
             .smbus_read_i2c_block_data(ACCEL_XOUT_H, 23)

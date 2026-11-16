@@ -5,6 +5,7 @@ use tokio::{
 };
 
 pub mod icm20948;
+pub mod pca9685;
 
 #[derive(Debug, Clone, Copy)]
 enum Command {
@@ -34,9 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let imu_tx = tx.clone();
     let imu_task = tokio::spawn(async move {
-        let mut tick = interval(Duration::from_millis(500));
         loop {
-            tick.tick().await;
             if imu_tx.send(Command::ReadImu).await.is_err() {
                 break;
             }

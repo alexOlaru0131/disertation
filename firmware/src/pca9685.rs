@@ -1,6 +1,8 @@
-use feather_m0 as bsp;
-use feather_m0::ehal::delay::DelayNs;
-use feather_m0::ehal::i2c::{Error as _, ErrorKind, I2c};
+use i2cdev::{
+    core::I2CDevice,
+    linux::{LinuxI2CDevice, LinuxI2CError},
+};
+use std::{fmt, thread, time::Duration};
 
 const MODE1: u8 = 0x00;
 const MODE2: u8 = 0x01;
@@ -17,45 +19,42 @@ const MAX_US: f32 = 2400.0;
 
 #[derive(Debug)]
 pub enum SensorError {
-    I2c(&'static str, ErrorKind),
-    InvalidServoCount(u8),
+    I2c(&'static str, LinuxI2CError),
     InvalidPwmCount(usize),
 }
 
 pub struct Pca9685 {
-    number_of_servos: u8,
-    address: u8,
+    address: u16,
+    i2c: LinuxI2CDevice,
 }
 
 impl Pca9685 {
-    pub fn new(number_of_servos: u8, address: u8) -> Self {
-        Self {
-            number_of_servos,
+    pub fn new(address: u16) -> Result<Self, SensorError> {
+        Ok(Self {
             address,
-        }
+            i2c: LinuxI2CDevice::new("/dev/i2c-1", address)
+                .map_err(|e| SensorError::I2c("open PCA", e))?,
+        })
     }
 
-    fn read_reg<I: I2c>(&self, i2c: &mut I, reg: u8) -> Result<u8, SensorError> {
-        let mut data = [0];
-        i2c.write_read(self.address, &[reg], &mut data)
-            .map_err(|e| SensorError::I2c("read register", e.kind()))?;
-        Ok(data[0])
+    fn read_reg(&self, reg: u8) -> Result<u8, SensorError> {
+        self.i2c
+            .smbus_read_byte_data(reg)
+            .map_err(|e| SensorError::I2c("read register", e))
     }
 
-    pub fn init<I: I2c, D: DelayNs>(
-        &mut self,
-        i2c: &mut I,
-        delay: &mut D,
-    ) -> Result<(), SensorError> {
-        let old_mode = self.read_reg(i2c, MODE1)?;
-        let old_mode2 = self.read_reg(i2c, MODE2)?;
+    pub fn init(&mut self) -> Result<(), SensorError> {
+        let old_mode = self.read_reg(MODE1)?;
+        let old_mode2 = self.read_reg(MODE2)?;
 
-        i2c.write(self.address, &[MODE2, old_mode2 | MODE2_OUTDRV])
-            .map_err(|e| SensorError::I2c("mode2 outdrv", e.kind()))?;
+        self.i2c
+            .smbus_write_byte_data(MODE2, old_mode2 | MODE2_OUTDRV)
+            .map_err(|e| SensorError::I2c("mode2 outdrv", e))?;
 
         let sleep_mode = (old_mode & !MODE1_RESTART) | MODE1_SLEEP;
-        i2c.write(self.address, &[MODE1, sleep_mode])
-            .map_err(|e| SensorError::I2c("mode1 sleep", e.kind()))?;
+        self.i2c
+            .smbus_write_byte_data(MODE1, sleep_mode)
+            .map_err(|e| SensorError::I2c("mode1 sleep", e))?;
         i2c.write(self.address, &[PRE_SCALE, PWM_FREQ_REG_VAL])
             .map_err(|e| SensorError::I2c("pre scale", e.kind()))?;
 
@@ -63,7 +62,7 @@ impl Pca9685 {
         i2c.write(self.address, &[MODE1, wake_mode])
             .map_err(|e| SensorError::I2c("mode1 wake", e.kind()))?;
 
-        delay.delay_ms(5);
+        thread::sleep(Duration::from_millis(5));
         i2c.write(self.address, &[MODE1, wake_mode | MODE1_RESTART | MODE1_AI])
             .map_err(|e| SensorError::I2c("mode1 restart", e.kind()))?;
         Ok(())
@@ -74,9 +73,6 @@ impl Pca9685 {
         i2c: &mut I,
         pwm_centidegrees: &[u16],
     ) -> Result<(), SensorError> {
-        if self.number_of_servos > 16 {
-            return Err(SensorError::InvalidServoCount(self.number_of_servos));
-        }
         if pwm_centidegrees.len() < self.number_of_servos as usize {
             return Err(SensorError::InvalidPwmCount(pwm_centidegrees.len()));
         }
