@@ -8,9 +8,9 @@ use tokio::sync::{mpsc, oneshot};
 
 pub mod icm20948;
 pub mod pca9685;
-mod usb;
+pub mod usb;
 
-pub(crate) enum Command {
+pub enum Command {
     ReadImu(oneshot::Sender<Result<[i32; 10], String>>),
     SetPwm([u16; 20], oneshot::Sender<Result<(), String>>),
     Shutdown,
