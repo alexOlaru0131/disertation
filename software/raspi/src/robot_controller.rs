@@ -1,4 +1,5 @@
 use crate::cloud_communication::CloudCommunicator;
+use crate::config::{BODY_HEIGHT, L_CO, L1, L2, LEG_MOUNTS, N, SAMPLE_MS, STANCE_HEIGHT};
 use crate::legs::Leg;
 use crate::mission_controller::MissionType;
 use crate::point::Point;
@@ -7,10 +8,6 @@ use std::error::Error;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{Duration, sleep};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-
-const L1: f64 = 0.1;
-const L2: f64 = 0.1;
-const L3: f64 = 0.05;
 
 type AppError = Box<dyn Error + Send + Sync>;
 
@@ -22,45 +19,17 @@ pub struct RobotController {
 
 impl RobotController {
     pub fn new(cloud_communicator: CloudCommunicator) -> Self {
-        let robot_position = Point::new(0.0, 0.0, 0.05);
-        let legs = [
+        let robot_position = Point::new(0.0, 0.0, BODY_HEIGHT);
+        let legs = std::array::from_fn(|index| {
+            let [x, y, z] = LEG_MOUNTS[index];
+            let direction = if index < 3 { 1.0 } else { -1.0 };
             Leg::new(
-                1,
-                Point::new(L1 + L2, 0.0, -L3),
-                0.083,
-                Point::new(0.06685, -0.072, 0.0),
-            ),
-            Leg::new(
-                2,
-                Point::new(L1 + L2, 0.0, -L3),
-                0.06685,
-                Point::new(0.0755, 0.0, 0.0),
-            ),
-            Leg::new(
-                3,
-                Point::new(L1 + L2, 0.0, -L3),
-                0.083,
-                Point::new(0.06685, 0.072, 0.0),
-            ),
-            Leg::new(
-                4,
-                Point::new(-(L1 + L2), 0.0, -L3),
-                0.083,
-                Point::new(-0.06685, -0.072, 0.0),
-            ),
-            Leg::new(
-                5,
-                Point::new(-(L1 + L2), 0.0, -L3),
-                0.06685,
-                Point::new(-0.0755, 0.0, 0.0),
-            ),
-            Leg::new(
-                6,
-                Point::new(-(L1 + L2), 0.0, -L3),
-                0.083,
-                Point::new(-0.06685, 0.072, 0.0),
-            ),
-        ];
+                (index + 1) as u8,
+                Point::new(direction * (L1 + L2), 0.0, -STANCE_HEIGHT),
+                L_CO[index],
+                Point::new(x, y, z),
+            )
+        });
         Self {
             robot_position,
             legs,
@@ -80,7 +49,7 @@ impl RobotController {
     }
 
     pub async fn walk(&mut self, target_point: Point) -> std::result::Result<(), AppError> {
-        for k in 0..60 {
+        for k in 0..N {
             for leg in &mut self.legs {
                 if [1, 3, 5].contains(&(leg.id as i32)) {
                     leg.straight_gait_swing_kinematics(k);
@@ -95,10 +64,10 @@ impl RobotController {
 
             self.send_state(robot_state).await?;
 
-            sleep(Duration::from_millis(100)).await;
+            sleep(Duration::from_millis(SAMPLE_MS)).await;
         }
 
-        for k in 0..60 {
+        for k in 0..N {
             for leg in &mut self.legs {
                 if [2, 4, 6].contains(&(leg.id as i32)) {
                     leg.straight_gait_swing_kinematics(k);
@@ -113,7 +82,7 @@ impl RobotController {
 
             self.send_state(robot_state).await?;
 
-            sleep(Duration::from_millis(100)).await;
+            sleep(Duration::from_millis(SAMPLE_MS)).await;
         }
 
         Ok(())

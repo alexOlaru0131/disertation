@@ -1,7 +1,7 @@
 use axum::{
     Router,
     extract::State,
-    http::header,
+    http::{StatusCode, header},
     response::{
         Html, IntoResponse,
         sse::{Event, KeepAlive, Sse},
@@ -49,6 +49,26 @@ async fn stylesheet() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
         include_str!("../web/style.css"),
+    )
+}
+
+async fn configuration() -> impl IntoResponse {
+    let path = std::env::var("ROBOT_CONFIG")
+        .unwrap_or_else(|_| format!("{}/../config.json", env!("CARGO_MANIFEST_DIR")));
+    let (status, contents) = match std::fs::read_to_string(path) {
+        Ok(contents) => (StatusCode::OK, contents),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Nu se poate citi config.json: {error}"),
+        ),
+    };
+    (
+        status,
+        [
+            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        contents,
     )
 }
 
@@ -127,6 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/editor.js", get(editor_script))
         .route("/kinematics.js", get(kinematics_script))
         .route("/style.css", get(stylesheet))
+        .route("/config.json", get(configuration))
         .route("/events", get(events))
         .with_state(latest);
 

@@ -1,5 +1,11 @@
-// Metri, conform software/raspi/src/legs.rs. Unghiurile STATE sunt în grade.
-export const LENGTHS = [0.05, 0.1, 0.1];
+export let LENGTHS;
+export function configureKinematics(config) {
+  const values = [config?.links_m?.l1, config?.links_m?.l2, config?.links_m?.l3];
+  if (!values.every((value) => typeof value === "number" && Number.isFinite(value) && value > 0)) {
+    throw new Error("config.json: links_m.l1/l2/l3 trebuie sa fie lungimi pozitive in metri");
+  }
+  LENGTHS = values;
+}
 export const DEG = Math.PI / 180;
 export const add = (a, b) => a.map((v, i) => v + b[i]);
 export const subtract = (a, b) => a.map((v, i) => v - b[i]);
@@ -21,7 +27,6 @@ export function parseState(values) {
   return { body: { position: values.slice(0, 3), rotation: values.slice(3, 6) }, legs };
 }
 
-// Rz(yaw) * Ry(pitch) * Rx(roll). Matricea este calculată o dată per transformare.
 export function transform(position, rotation) {
   const [r, p, y] = rotation.map((v) => v * DEG);
   const [sr, cr, sp, cp, sy, cy] = [Math.sin(r), Math.cos(r), Math.sin(p), Math.cos(p), Math.sin(y), Math.cos(y)];
@@ -39,7 +44,6 @@ export function transform(position, rotation) {
   };
 }
 
-// Articulațiile piciorului în sistemul local al corpului.
 export function legJoints(leg) {
   const [l1, l2, l3] = LENGTHS;
   const [a, b, c] = leg.angles.map((v) => v * DEG);
@@ -55,8 +59,6 @@ export function legJoints(leg) {
 
 const wrap = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
 
-// Folosit doar în editor: păstrează lungimile la tragerea unui vârf.
-// Dintre soluțiile posibile se alege cea mai apropiată de postura curentă.
 export function anglesForFoot(leg, foot) {
   const [l1, l2, l3] = LENGTHS;
   const [x, y, z] = transform(leg.motor, leg.motorRotation).toLocal(foot);

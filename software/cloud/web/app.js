@@ -1,4 +1,4 @@
-import { add, subtract, dot, norm, parseState, transform, legJoints } from "./kinematics.js";
+import { add, subtract, dot, norm, parseState, transform, legJoints, configureKinematics } from "./kinematics.js";
 import { PoseEditor } from "./editor.js";
 
 const canvas = document.getElementById("scene");
@@ -57,27 +57,40 @@ function setConnection(status, text) {
   connection.textContent = text;
 }
 
-const events = new EventSource("/events");
-events.onopen = () => setConnection("online", "Conectat · aștept STATE");
-events.onerror = () => setConnection("offline", "Conexiune întreruptă · reconectare");
-events.onmessage = (message) => {
+async function connect() {
   try {
-    const next = parseState(JSON.parse(message.data));
-    if (!next) throw new Error("STATE invalid");
-    if (!liveState) cameras.live.focus = [...next.body.position];
-    liveState = next;
-    copyState.disabled = false;
-    setConnection("online", "STATE în timp real");
-    if (editing && !editor.pose) {
-      editor.load(next);
-      cameras.editor.focus = [...next.body.position];
-    }
-    if (!editing) { geometryDirty = true; requestDraw(); }
+    const response = await fetch("/config.json", { cache: "no-store" });
+    if (!response.ok) throw new Error(`config.json: HTTP ${response.status}`);
+    configureKinematics(await response.json());
+
+    const events = new EventSource("/events");
+    events.onopen = () => setConnection("online", "Conectat · aștept STATE");
+    events.onerror = () => setConnection("offline", "Conexiune întreruptă · reconectare");
+    events.onmessage = (message) => {
+      try {
+        const next = parseState(JSON.parse(message.data));
+        if (!next) throw new Error("STATE invalid");
+        if (!liveState) cameras.live.focus = [...next.body.position];
+        liveState = next;
+        copyState.disabled = false;
+        setConnection("online", "STATE în timp real");
+        if (editing && !editor.pose) {
+          editor.load(next);
+          cameras.editor.focus = [...next.body.position];
+        }
+        if (!editing) { geometryDirty = true; requestDraw(); }
+      } catch (error) {
+        setConnection("offline", "STATE invalid");
+        console.error(error);
+      }
+    };
   } catch (error) {
-    setConnection("offline", "STATE invalid");
+    setConnection("offline", "config.json invalid");
+    empty.textContent = error.message;
     console.error(error);
   }
-};
+}
+connect();
 
 function resize() {
   const rect = canvas.getBoundingClientRect();
@@ -176,7 +189,6 @@ function drawGrid(project) {
 
 function prepareGeometry(state) {
   const bodyToWorld = transform(state.body.position, state.body.rotation).toWorld;
-  // Conturul carcasei trece prin motoarele primite în STATE, în ordine în jurul centrului.
   const mounts = state.legs.map((leg) => leg.motor).filter((point, i, all) =>
     all.findIndex((other) => norm(subtract(point, other)) < 1e-9) === i);
   const centroid = mounts.reduce((sum, point) => add(sum, point), [0, 0, 0]).map((value) => value / mounts.length);
@@ -260,8 +272,6 @@ function drawLegs(project, primitives) {
         circle(joint, jointIndex === 3 ? 0.085 : 0.07, jointIndex === 3 ? "#ffc189" : "#b4e8de", "#0b2532");
       } });
     });
-    // Un vârf raportat incompatibil cu unghiurile rămâne vizibil ca reper,
-    // fără să întindem artificial ultimul segment până la el.
     if (reported && norm(subtract(foot, worldJoints[3])) > 0.005) {
       primitives.push({ depth: reported.depth - 0.01, draw() {
         circle(reported, 0.06, "#142938", "#cde5e5");

@@ -1,15 +1,7 @@
+use crate::config::{D, L_OF, L1, L2, L3, LIFT, LONG, N, STANCE_HEIGHT};
 use crate::point::Point;
 use libm::{asin, atan2, cos, sin};
 use std::f64::consts::PI;
-
-const L1: f64 = 0.1;
-const L2: f64 = 0.1;
-const L3: f64 = 0.05;
-const L_OF: f64 = 0.02;
-const D: f64 = 0.12;
-const N: f64 = 60.0;
-const LIFT: f64 = 0.05;
-const LONG: f64 = 0.12;
 
 #[derive(Clone, Copy)]
 pub struct Leg {
@@ -22,26 +14,30 @@ pub struct Leg {
 
 impl Leg {
     pub fn new(id: u8, initial_point: Point, l_co: f64, point_om: Point) -> Self {
+        let leg_position = Point::new(
+            point_om.x + initial_point.x,
+            point_om.y + initial_point.y,
+            point_om.z + initial_point.z,
+        );
         let mut leg = Self {
             id,
-            leg_position: initial_point,
+            leg_position,
             leg_motor_angles: [0.0; 3],
             l_co,
             point_om,
         };
 
-        leg.inverse_kinematics(initial_point);
+        leg.inverse_kinematics(leg_position);
 
         leg
     }
 
     pub fn straight_gait_swing_kinematics(&mut self, k: u8) -> Point {
-        let x = self.point_om.x + L_OF * cos(self.leg_position.rot_z);
-        let y = self.point_om.y
-            + L_OF * sin(self.leg_position.rot_z)
-            + D * (k as f64 / N - (1 / 2) as f64);
-        let z = self.point_om.z - 0.15
-            + LIFT * cos(PI * (y - self.point_om.y - L_OF * sin(self.leg_position.rot_z)) / LONG);
+        let heading = if self.point_om.x < 0.0 { PI } else { 0.0 };
+        let x = self.point_om.x + L_OF * cos(heading);
+        let y = self.point_om.y + L_OF * sin(heading) + D * (f64::from(k) / f64::from(N) - 0.5);
+        let z = self.point_om.z - STANCE_HEIGHT
+            + LIFT * cos(PI * (y - self.point_om.y - L_OF * sin(heading)) / LONG);
 
         self.leg_position = Point::new(x, y, z);
 
@@ -56,11 +52,10 @@ impl Leg {
     }
 
     pub fn straight_gait_stance_kinematics(&mut self, k: u8) -> Point {
-        let x = self.point_om.x + L_OF * cos(self.leg_position.rot_z);
-        let y = self.point_om.y
-            + L_OF * sin(self.leg_position.rot_z)
-            + D * (-(k as f64) / N + (1 / 2) as f64);
-        let z = self.point_om.z - 0.15;
+        let heading = if self.point_om.x < 0.0 { PI } else { 0.0 };
+        let x = self.point_om.x + L_OF * cos(heading);
+        let y = self.point_om.y + L_OF * sin(heading) + D * (0.5 - f64::from(k) / f64::from(N));
+        let z = self.point_om.z - STANCE_HEIGHT;
 
         self.leg_position = Point::new(x, y, z);
 
@@ -76,10 +71,10 @@ impl Leg {
 
     pub fn swivel_gait_swing_kinematics(&mut self, k: u8) -> Point {
         let x = cos(self.leg_position.rot_z) * (self.l_co + L_OF)
-            - sin(self.leg_position.rot_z) * D * (k as f64 / N - (1 / 2) as f64);
+            - sin(self.leg_position.rot_z) * D * (f64::from(k) / f64::from(N) - 0.5);
         let y = sin(self.leg_position.rot_z) * (self.l_co + L_OF)
-            + cos(self.leg_position.rot_z) * D * (k as f64 / N - (1 / 2) as f64);
-        let z = -0.15 + LIFT * cos(PI * (k as f64 / N - (1 / 2) as f64));
+            + cos(self.leg_position.rot_z) * D * (f64::from(k) / f64::from(N) - 0.5);
+        let z = -STANCE_HEIGHT + LIFT * cos(PI * (f64::from(k) / f64::from(N) - 0.5));
 
         self.leg_position = Point::new(x, y, z);
 
@@ -95,10 +90,10 @@ impl Leg {
 
     pub fn swivel_gait_stance_kinematics(&mut self, k: u8) -> Point {
         let x = cos(self.leg_position.rot_z) * (self.l_co + L_OF)
-            - sin(self.leg_position.rot_z) * D * (k as f64 / N - (1 / 2) as f64);
+            - sin(self.leg_position.rot_z) * D * (f64::from(k) / f64::from(N) - 0.5);
         let y = sin(self.leg_position.rot_z) * (self.l_co + L_OF)
-            + cos(self.leg_position.rot_z) * D * (k as f64 / N - (1 / 2) as f64);
-        let z = -0.15;
+            + cos(self.leg_position.rot_z) * D * (f64::from(k) / f64::from(N) - 0.5);
+        let z = -STANCE_HEIGHT;
 
         self.leg_position = Point::new(x, y, z);
 
@@ -113,14 +108,9 @@ impl Leg {
     }
 
     pub fn inverse_kinematics(&mut self, target_point: Point) -> [f64; 3] {
-        let Point {
-            x,
-            y,
-            z,
-            rot_x: _,
-            rot_y: _,
-            rot_z: _,
-        } = target_point;
+        let x = target_point.x - self.point_om.x;
+        let y = target_point.y - self.point_om.y;
+        let z = target_point.z - self.point_om.z;
 
         let theta1 = atan2(y, x);
         let c1 = cos(theta1);

@@ -5,6 +5,7 @@ use std::error::Error;
 use tokio::sync::mpsc;
 
 pub mod cloud_communication;
+pub mod config;
 pub mod legs;
 pub mod mission_controller;
 pub mod point;
