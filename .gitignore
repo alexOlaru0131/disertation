@@ -22,3 +22,4 @@
 /software/raspi/target
 /software/target-local
 /firmware_feather/target
+/firmware/Cargo.lock

@@ -1,3 +1,4 @@
+use gpio_cdev::{Chip, LineHandle, LineRequestFlags};
 use icm20948::Icm20948;
 use pca9685::Pca9685;
 use std::sync::{
@@ -13,6 +14,11 @@ pub mod usb;
 pub enum Command {
     ReadImu(oneshot::Sender<Result<[i32; 10], String>>),
     SetPwm([u16; 20], oneshot::Sender<Result<(), String>>),
+    ReadStops(oneshot::Sender<Result<[u8; 6], String>>),
+    TurnOnLaserLed(oneshot::Sender<Result<(), String>>),
+    TurnOffLaserLed(oneshot::Sender<Result<(), String>>),
+    TurnOnLed(oneshot::Sender<Result<(), String>>),
+    TurnOffLed(oneshot::Sender<Result<(), String>>),
     Shutdown,
 }
 
@@ -28,6 +34,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             pca42.init()?;
             let mut pca41 = Pca9685::new(0x41)?;
             pca41.init()?;
+
+            let mut chip = Chip::new("/dev/gpiochip0")?;
+            let laser_led: LineHandle =
+                chip.get_line(26)?
+                    .request(LineRequestFlags::OUTPUT, 0, "hexapod-gpio")?;
+            let led: LineHandle =
+                chip.get_line(16)?
+                    .request(LineRequestFlags::OUTPUT, 0, "hexapod-gpio")?;
+
+            let stop_1: LineHandle =
+                chip.get_line(23)?
+                    .request(LineRequestFlags::INPUT, 0, "hexapod-gpio")?;
+            let stop_2: LineHandle =
+                chip.get_line(24)?
+                    .request(LineRequestFlags::INPUT, 0, "hexapod-gpio")?;
+            let stop_3: LineHandle =
+                chip.get_line(25)?
+                    .request(LineRequestFlags::INPUT, 0, "hexapod-gpio")?;
+            let stop_4: LineHandle =
+                chip.get_line(17)?
+                    .request(LineRequestFlags::INPUT, 0, "hexapod-gpio")?;
+            let stop_5: LineHandle =
+                chip.get_line(27)?
+                    .request(LineRequestFlags::INPUT, 0, "hexapod-gpio")?;
+            let stop_6: LineHandle =
+                chip.get_line(22)?
+                    .request(LineRequestFlags::INPUT, 0, "hexapod-gpio")?;
 
             while let Some(command) = rx.blocking_recv() {
                 match command {
@@ -53,9 +86,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         };
                         let _ = reply.send(result);
                     }
+                    Command::TurnOnLaserLed(reply) => match laser_led.set_value(1u8) {
+                        Ok(()) => {
+                            let _ = reply.send(Ok(()));
+                        }
+                        Err(error) => {
+                            let _ = reply.send(Err(error.to_string()));
+                        }
+                    },
+                    Command::TurnOffLaserLed(reply) => match laser_led.set_value(0u8) {
+                        Ok(()) => {
+                            let _ = reply.send(Ok(()));
+                        }
+                        Err(error) => {
+                            let _ = reply.send(Err(error.to_string()));
+                        }
+                    },
+                    Command::TurnOnLed(reply) => match led.set_value(1u8) {
+                        Ok(()) => {
+                            let _ = reply.send(Ok(()));
+                        }
+                        Err(error) => {
+                            let _ = reply.send(Err(error.to_string()));
+                        }
+                    },
+                    Command::TurnOffLed(reply) => match led.set_value(0u8) {
+                        Ok(()) => {
+                            let _ = reply.send(Ok(()));
+                        }
+                        Err(error) => {
+                            let _ = reply.send(Err(error.to_string()));
+                        }
+                    },
+                    Command::ReadStops(reply) => {
+                        let _ = reply.send(Ok([
+                            stop_1.get_value()?,
+                            stop_2.get_value()?,
+                            stop_3.get_value()?,
+                            stop_4.get_value()?,
+                            stop_5.get_value()?,
+                            stop_6.get_value()?,
+                        ]));
+                    }
                     Command::Shutdown => break,
                 }
             }
+
             Ok(())
         },
     );
