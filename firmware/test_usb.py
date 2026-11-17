@@ -63,13 +63,25 @@ def send_command(port, request):
     elif response.get("type") == "error":
         print(f"Eroare: {response['message']}")
     elif response.get("type") == "ack":
-        print("PCA9685 0x42 și 0x41: comandă aplicată.")
+        labels = {
+            "set_pwm": "PCA9685 0x42 și 0x41: comandă aplicată.",
+            "turn_on_laser_led": "Laser LED aprins.",
+            "turn_off_laser_led": "Laser LED stins.",
+            "turn_on_led": "LED aprins.",
+            "turn_off_led": "LED stins.",
+        }
+        print(labels.get(request["type"], "Comandă aplicată."))
     elif response.get("type") == "imu":
         values = response["values"]
         print("Accelerație (m/s²):", [v / 100 for v in values[0:3]])
         print("Giroscop (rad/s):", [v / 100 for v in values[3:6]])
         print("Magnetometru (µT):", [v / 100 for v in values[6:9]])
         print("Temperatură (°C):", values[9] / 100)
+    elif response.get("type") == "stops":
+        names = ("SD", "D", "FD", "SS", "S", "FS")
+        for name, value in zip(names, response["values"]):
+            state = "apăsat" if value == 0 else "liber"
+            print(f"Endstop {name}: {state} (GPIO={value})")
     else:
         print(f"Răspuns necunoscut: {response}")
 
@@ -89,17 +101,32 @@ def main():
                 print("\n1. Citește IMU")
                 print("2. Același unghi pentru toate cele 20 de ieșiri")
                 print("3. Câte un unghi pentru fiecare dintre cele 20 de ieșiri")
+                print("4. Citește cele 6 endstop-uri")
+                print("5. Aprinde laser LED")
+                print("6. Stinge laser LED")
+                print("7. Aprinde LED")
+                print("8. Stinge LED")
                 print("0. Ieșire")
                 choice = input("Alege: ").strip()
 
                 if choice == "0":
                     break
-                if choice not in {"1", "2", "3"}:
+                if choice not in {"1", "2", "3", "4", "5", "6", "7", "8"}:
                     print("Opțiune necunoscută.")
                     continue
                 request_id += 1
                 if choice == "1":
                     request = {"type": "read_imu", "id": request_id}
+                elif choice == "4":
+                    request = {"type": "read_stops", "id": request_id}
+                elif choice in {"5", "6", "7", "8"}:
+                    command = {
+                        "5": "turn_on_laser_led",
+                        "6": "turn_off_laser_led",
+                        "7": "turn_on_led",
+                        "8": "turn_off_led",
+                    }[choice]
+                    request = {"type": command, "id": request_id}
                 else:
                     if choice == "3":
                         print("Valorile 1–10: PCA 0x42, canalele 0–9;")

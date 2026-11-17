@@ -19,12 +19,18 @@ const MAX_LINE: usize = 4096;
 enum Request {
     ReadImu { id: u64 },
     SetPwm { id: u64, angles: Vec<u16> },
+    ReadStops { id: u64 },
+    TurnOnLaserLed { id: u64 },
+    TurnOffLaserLed { id: u64 },
+    TurnOnLed { id: u64 },
+    TurnOffLed { id: u64 },
 }
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Response {
     Imu { id: u64, values: [i32; 10] },
+    Stops { id: u64, values: [u8; 6] },
     Ack { id: u64 },
     Error { id: u64, message: String },
 }
@@ -35,6 +41,34 @@ impl Response {
             id,
             message: message.into(),
         }
+    }
+}
+
+fn send_ack_command(
+    id: u64,
+    tx: &mpsc::Sender<Command>,
+    make_command: impl FnOnce(oneshot::Sender<Result<(), String>>) -> Command,
+) -> Response {
+    let (reply, answer) = oneshot::channel();
+    if tx.blocking_send(make_command(reply)).is_err() {
+        return Response::error(id, "workerul hardware este oprit");
+    }
+    match answer.blocking_recv() {
+        Ok(Ok(())) => Response::Ack { id },
+        Ok(Err(error)) => Response::error(id, error),
+        Err(_) => Response::error(id, "workerul hardware nu a raspuns"),
+    }
+}
+
+fn read_stops(id: u64, tx: &mpsc::Sender<Command>) -> Response {
+    let (reply, answer) = oneshot::channel();
+    if tx.blocking_send(Command::ReadStops(reply)).is_err() {
+        return Response::error(id, "workerul GPIO este oprit");
+    }
+    match answer.blocking_recv() {
+        Ok(Ok(values)) => Response::Stops { id, values },
+        Ok(Err(error)) => Response::error(id, error),
+        Err(_) => Response::error(id, "workerul GPIO nu a raspuns"),
     }
 }
 
@@ -72,6 +106,11 @@ fn handle_request(line: &[u8], tx: &mpsc::Sender<Command>) -> Response {
                 Err(_) => Response::error(id, "workerul I2C nu a raspuns"),
             }
         }
+        Request::ReadStops { id } => read_stops(id, tx),
+        Request::TurnOnLaserLed { id } => send_ack_command(id, tx, Command::TurnOnLaserLed),
+        Request::TurnOffLaserLed { id } => send_ack_command(id, tx, Command::TurnOffLaserLed),
+        Request::TurnOnLed { id } => send_ack_command(id, tx, Command::TurnOnLed),
+        Request::TurnOffLed { id } => send_ack_command(id, tx, Command::TurnOffLed),
     }
 }
 

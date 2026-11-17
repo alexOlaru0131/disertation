@@ -43,24 +43,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 chip.get_line(16)?
                     .request(LineRequestFlags::OUTPUT, 0, "hexapod-gpio")?;
 
-            let stop_1: LineHandle =
-                chip.get_line(23)?
-                    .request(LineRequestFlags::INPUT, 0, "hexapod-gpio")?;
-            let stop_2: LineHandle =
-                chip.get_line(24)?
-                    .request(LineRequestFlags::INPUT, 0, "hexapod-gpio")?;
-            let stop_3: LineHandle =
-                chip.get_line(25)?
-                    .request(LineRequestFlags::INPUT, 0, "hexapod-gpio")?;
-            let stop_4: LineHandle =
-                chip.get_line(17)?
-                    .request(LineRequestFlags::INPUT, 0, "hexapod-gpio")?;
-            let stop_5: LineHandle =
-                chip.get_line(27)?
-                    .request(LineRequestFlags::INPUT, 0, "hexapod-gpio")?;
-            let stop_6: LineHandle =
-                chip.get_line(22)?
-                    .request(LineRequestFlags::INPUT, 0, "hexapod-gpio")?;
+            let stop_1: LineHandle = chip.get_line(23)?.request(
+                LineRequestFlags::INPUT | LineRequestFlags::from_bits_retain(1 << 5),
+                0,
+                "hexapod-gpio",
+            )?;
+            let stop_2: LineHandle = chip.get_line(24)?.request(
+                LineRequestFlags::INPUT | LineRequestFlags::from_bits_retain(1 << 5),
+                0,
+                "hexapod-gpio",
+            )?;
+            let stop_3: LineHandle = chip.get_line(25)?.request(
+                LineRequestFlags::INPUT | LineRequestFlags::from_bits_retain(1 << 5),
+                0,
+                "hexapod-gpio",
+            )?;
+            let stop_4: LineHandle = chip.get_line(17)?.request(
+                LineRequestFlags::INPUT | LineRequestFlags::from_bits_retain(1 << 5),
+                0,
+                "hexapod-gpio",
+            )?;
+            let stop_5: LineHandle = chip.get_line(27)?.request(
+                LineRequestFlags::INPUT | LineRequestFlags::from_bits_retain(1 << 5),
+                0,
+                "hexapod-gpio",
+            )?;
+            let stop_6: LineHandle = chip.get_line(22)?.request(
+                LineRequestFlags::INPUT | LineRequestFlags::from_bits_retain(1 << 5),
+                0,
+                "hexapod-gpio",
+            )?;
 
             while let Some(command) = rx.blocking_recv() {
                 match command {
