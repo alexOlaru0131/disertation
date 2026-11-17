@@ -17,6 +17,7 @@ const MAX_LINE: usize = 4096;
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Request {
+    Ready { id: u64 },
     ReadImu { id: u64 },
     SetPwm { id: u64, angles: Vec<u16> },
     ReadStops { id: u64 },
@@ -29,6 +30,7 @@ enum Request {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Response {
+    Ready { id: u64, status: &'static str },
     Imu { id: u64, values: [i32; 10] },
     Stops { id: u64, values: [u8; 6] },
     Ack { id: u64 },
@@ -72,6 +74,26 @@ fn read_stops(id: u64, tx: &mpsc::Sender<Command>) -> Response {
     }
 }
 
+fn check_ready(id: u64, tx: &mpsc::Sender<Command>) -> Response {
+    let (reply, answer) = oneshot::channel();
+    if tx.blocking_send(Command::Ready(reply)).is_err() {
+        return Response::Ready {
+            id,
+            status: "Not ready",
+        };
+    }
+    match answer.blocking_recv() {
+        Ok(Ok(())) => Response::Ready {
+            id,
+            status: "Ready",
+        },
+        Ok(Err(_)) | Err(_) => Response::Ready {
+            id,
+            status: "Not ready",
+        },
+    }
+}
+
 fn handle_request(line: &[u8], tx: &mpsc::Sender<Command>) -> Response {
     let request: Request = match serde_json::from_slice(line) {
         Ok(request) => request,
@@ -79,6 +101,7 @@ fn handle_request(line: &[u8], tx: &mpsc::Sender<Command>) -> Response {
     };
 
     match request {
+        Request::Ready { id } => check_ready(id, tx),
         Request::ReadImu { id } => {
             let (reply, answer) = oneshot::channel();
             if tx.blocking_send(Command::ReadImu(reply)).is_err() {

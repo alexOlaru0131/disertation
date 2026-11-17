@@ -62,6 +62,8 @@ def send_command(port, request):
         print(f"ID neașteptat în răspuns: {response}")
     elif response.get("type") == "error":
         print(f"Eroare: {response['message']}")
+    elif response.get("type") == "ready":
+        print(f"Firmware: {response['status']}")
     elif response.get("type") == "ack":
         labels = {
             "set_pwm": "PCA9685 0x42 și 0x41: comandă aplicată.",
@@ -106,16 +108,19 @@ def main():
                 print("6. Stinge laser LED")
                 print("7. Aprinde LED")
                 print("8. Stinge LED")
+                print("9. Verifică starea de inițializare (READY)")
                 print("0. Ieșire")
                 choice = input("Alege: ").strip()
 
                 if choice == "0":
                     break
-                if choice not in {"1", "2", "3", "4", "5", "6", "7", "8"}:
+                if choice not in {"1", "2", "3", "4", "5", "6", "7", "8", "9"}:
                     print("Opțiune necunoscută.")
                     continue
                 request_id += 1
-                if choice == "1":
+                if choice == "9":
+                    request = {"type": "ready", "id": request_id}
+                elif choice == "1":
                     request = {"type": "read_imu", "id": request_id}
                 elif choice == "4":
                     request = {"type": "read_stops", "id": request_id}

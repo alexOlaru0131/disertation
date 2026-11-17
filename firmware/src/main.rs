@@ -19,6 +19,7 @@ pub enum Command {
     TurnOffLaserLed(oneshot::Sender<Result<(), String>>),
     TurnOnLed(oneshot::Sender<Result<(), String>>),
     TurnOffLed(oneshot::Sender<Result<(), String>>),
+    Ready(oneshot::Sender<Result<(), String>>),
     Shutdown,
 }
 
@@ -26,7 +27,7 @@ pub enum Command {
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (tx, mut rx) = mpsc::channel::<Command>(32);
 
-    let mut i2c_thread = tokio::task::spawn_blocking(
+    let i2c_thread = tokio::task::spawn_blocking(
         move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let mut imu = Icm20948::new()?;
             imu.init()?;
@@ -132,13 +133,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     },
                     Command::ReadStops(reply) => {
                         let _ = reply.send(Ok([
-                            stop_1.get_value()?,
-                            stop_2.get_value()?,
-                            stop_3.get_value()?,
-                            stop_4.get_value()?,
-                            stop_5.get_value()?,
-                            stop_6.get_value()?,
+                            !stop_1.get_value()?,
+                            !stop_2.get_value()?,
+                            !stop_3.get_value()?,
+                            !stop_4.get_value()?,
+                            !stop_5.get_value()?,
+                            !stop_6.get_value()?,
                         ]));
+                    }
+                    Command::Ready(reply) => {
+                        let _ = reply.send(Ok(()));
                     }
                     Command::Shutdown => break,
                 }
@@ -155,18 +159,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         move || usb::serve(tx, stop)
     });
 
-    let result = tokio::select! {
-        result = &mut i2c_thread => result?,
-        signal = tokio::signal::ctrl_c() => {
-            signal?;
-            stop.store(true, Ordering::Relaxed);
-            let _ = tx.send(Command::Shutdown).await;
-            i2c_thread.await?
-        }
-    };
+    tokio::signal::ctrl_c().await?;
     stop.store(true, Ordering::Relaxed);
+    let _ = tx.send(Command::Shutdown).await;
     usb_thread.join().expect("USB thread panicked");
-    result?;
+    i2c_thread.await??;
 
     Ok(())
 }
