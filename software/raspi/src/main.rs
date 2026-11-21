@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 
 pub mod cloud_communication;
 pub mod config;
+pub mod ili9488;
 pub mod legs;
 pub mod mission_controller;
 pub mod point;

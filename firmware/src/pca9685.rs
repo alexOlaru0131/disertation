@@ -22,6 +22,7 @@ pub enum Error {
     I2c(&'static str, LinuxI2CError),
     InvalidPwmCount(usize),
     InvalidAddress(u16),
+    InvalidMotorNumber(u8),
     InvalidAngle(usize, u16),
 }
 
@@ -87,31 +88,54 @@ impl Pca9685 {
         (pulse_us * 50.0 * 4096.0 / 1_000_000.0 + 0.5) as u16
     }
 
+    fn first_channel(&self) -> Result<u8, Error> {
+        match self.address {
+            0x42 => Ok(0),
+            0x41 => Ok(6),
+            address => Err(Error::InvalidAddress(address)),
+        }
+    }
+
+    fn write_channel_angle(&mut self, channel: u8, centidegrees: u16) -> Result<(), Error> {
+        let ticks = Self::angle_to_ticks(centidegrees);
+        let bytes = [
+            LED0_ON_L + 4 * channel,
+            0,
+            0,
+            ticks as u8,
+            ((ticks >> 8) & 0x0F) as u8,
+        ];
+        self.i2c.write(&bytes).map_err(|e| Error::I2c("set pwm", e))
+    }
+
+    /// Set one motor by its 1-based position in this PCA9685's 10-motor group.
+    /// Address 0x42 maps motors 1-10 to channels 0-9; address 0x41 maps them
+    /// to channels 6-15.
+    pub fn set_motor_angle(&mut self, motor_number: u8, centidegrees: u16) -> Result<(), Error> {
+        if !(1..=10).contains(&motor_number) {
+            return Err(Error::InvalidMotorNumber(motor_number));
+        }
+        if centidegrees > 36_000 {
+            return Err(Error::InvalidAngle(
+                usize::from(motor_number - 1),
+                centidegrees,
+            ));
+        }
+        let channel = self.first_channel()? + motor_number - 1;
+        self.write_channel_angle(channel, centidegrees)
+    }
+
     pub fn set_pwm_vals(&mut self, pwm_vals: &[u16]) -> Result<(), Error> {
         if pwm_vals.len() != 10 {
             return Err(Error::InvalidPwmCount(pwm_vals.len()));
         }
-        let start_channel = match self.address {
-            0x42 => 0,
-            0x41 => 6,
-            address => return Err(Error::InvalidAddress(address)),
-        };
+        self.first_channel()?;
         if let Some(index) = pwm_vals.iter().position(|&angle| angle > 36_000) {
             return Err(Error::InvalidAngle(index, pwm_vals[index]));
         }
 
         for (channel, &centidegrees) in pwm_vals.iter().enumerate() {
-            let ticks = Self::angle_to_ticks(centidegrees);
-            let bytes = [
-                LED0_ON_L + 4 * (start_channel + channel) as u8,
-                0,
-                0,
-                ticks as u8,
-                ((ticks >> 8) & 0x0F) as u8,
-            ];
-            self.i2c
-                .write(&bytes)
-                .map_err(|e| Error::I2c("set pwm", e))?;
+            self.set_motor_angle((channel + 1) as u8, centidegrees)?;
         }
         Ok(())
     }
